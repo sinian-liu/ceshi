@@ -353,7 +353,6 @@ echo "DNS地址:      $dns_address"
 echo "地理位置:     $location"
 echo "系统时间:     $timezone $sys_time"
 echo "-------------"
-echo "运行时长:     $uptime_formatted"
 
 # 输出性能测试结果
 echo -e "\n${YELLOW}系统性能基准测试结果${NC}"
@@ -369,7 +368,7 @@ echo "---------------------------------"
 echo " 内存读测试:          ${memory_read_result} MB/s"
 echo " 内存写测试:          ${memory_write_result} MB/s"
 echo "---------------------------------"
-
+echo "系统运行时长:     $uptime_formatted"
 
 # 颜色定义
 YELLOW='\033[1;33m'
