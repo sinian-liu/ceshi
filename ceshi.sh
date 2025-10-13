@@ -352,7 +352,6 @@ echo "IPv4地址:     $ipv4"
 echo "DNS地址:      $dns_address"
 echo "地理位置:     $location"
 echo "系统时间:     $timezone $sys_time"
-echo "-------------"
 # 输出性能测试结果
 echo -e "\n${YELLOW}系统性能基准测试结果${NC}"
 echo " 1 线程测试(单核)得分:          ${single_thread_score} Scores"
