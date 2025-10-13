@@ -231,26 +231,9 @@ run_sysbench_memory_test() {
 perform_benchmarks() {
     echo "开始系统性能基准测试..."
     
-    # 检查是否安装了sysbench
-    if ! command -v sysbench &>/dev/null; then
-        echo "sysbench 未安装，使用模拟数据进行测试显示..."
-        # 设置模拟数据
-        logical_cores=$(nproc)
-        single_thread_score=3306
-        if [ "$logical_cores" -gt 1 ]; then
-            # 根据核心数生成合理的模拟多线程得分
-            multi_thread_score=$((single_thread_score * logical_cores * 85 / 100))
-            has_multi_thread=true
-        else
-            has_multi_thread=false
-        fi
-        memory_read_result="36453.10"
-        memory_write_result="22543.58"
-    else
-        # 运行实际的性能测试
-        run_sysbench_cpu_test
-        run_sysbench_memory_test
-    fi
+    # 直接运行性能测试（因为sysbench已在首次运行时安装）
+    run_sysbench_cpu_test
+    run_sysbench_memory_test
     
     echo "系统性能基准测试完成"
 }
@@ -279,9 +262,9 @@ kernel_version=$(uname -r)
 
 # CPU信息
 cpu_arch=$(uname -m)
-cpu_model=$(awk -F': ' '/model name/ {print $2; exit}' /proc/cuinfo | xargs)
-cpu_cores=$(grep -c ^processor /proc/cuinfo)
-cpu_frequency=$(awk -F': ' '/cpu MHz/ {print $2; exit}' /proc/cuinfo | awk '{printf "%.4f GHz", $1 / 1000}')
+cpu_model=$(awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo | xargs)
+cpu_cores=$(grep -c ^processor /proc/cpuinfo)
+cpu_frequency=$(awk -F': ' '/cpu MHz/ {print $2; exit}' /proc/cpuinfo | awk '{printf "%.4f GHz", $1 / 1000}')
 cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{printf "%.1f%%", $2 + $4}')
 
 # 系统负载
@@ -374,18 +357,17 @@ echo "运行时长:     $uptime_formatted"
 
 # 输出性能测试结果
 echo -e "\n${YELLOW}SysBench 性能测试结果${NC}"
-echo " 1 线程测试(单核)得分:          ${single_thread_score:-0} Scores"
+echo " 1 线程测试(单核)得分:          ${single_thread_score} Scores"
 
 # 只有在有多线程测试结果时才显示多线程测试
 if [ "$has_multi_thread" = true ]; then
     logical_cores=$(nproc)
-    echo " ${logical_cores} 线程测试(多核)得分:          ${multi_thread_score:-0} Scores"
+    echo " ${logical_cores} 线程测试(多核)得分:          ${multi_thread_score} Scores"
 fi
 
-echo " SysBench 内存测试 (Fast Mode, 1-Pass @ 5sec)"
 echo "---------------------------------"
-echo " 内存读测试:          ${memory_read_result:-0} MB/s"
-echo " 内存写测试:          ${memory_write_result:-0} MB/s"
+echo " 内存读测试:          ${memory_read_result} MB/s"
+echo " 内存写测试:          ${memory_write_result} MB/s"
 echo "---------------------------------"
 
 
