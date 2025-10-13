@@ -169,6 +169,9 @@ EOF'
 run_sysbench_cpu_test() {
     echo "正在执行SysBench CPU性能测试..."
     
+    # 获取CPU逻辑核心数（线程数）
+    logical_cores=$(nproc)
+    
     # 单线程测试
     echo "执行单线程CPU测试..."
     single_thread_result=$(sysbench cpu --threads=1 --cpu-max-prime=20000 run 2>/dev/null | grep "events per second:" | awk '{print $4}')
@@ -178,14 +181,20 @@ run_sysbench_cpu_test() {
         single_thread_score=3306
     fi
     
-    # 多线程测试（使用所有CPU核心）
-    cpu_cores=$(nproc)
-    echo "执行${cpu_cores}线程CPU测试..."
-    multi_thread_result=$(sysbench cpu --threads=$cpu_cores --cpu-max-prime=20000 run 2>/dev/null | grep "events per second:" | awk '{print $4}')
-    if [ -n "$multi_thread_result" ]; then
-        multi_thread_score=$(echo "$multi_thread_result * 1000" | bc -l 2>/dev/null | awk '{printf "%.0f", $1}')
+    # 多线程测试（使用所有逻辑核心）- 只有在多核时才执行
+    if [ "$logical_cores" -gt 1 ]; then
+        echo "执行${logical_cores}线程CPU测试..."
+        multi_thread_result=$(sysbench cpu --threads=$logical_cores --cpu-max-prime=20000 run 2>/dev/null | grep "events per second:" | awk '{print $4}')
+        if [ -n "$multi_thread_result" ]; then
+            multi_thread_score=$(echo "$multi_thread_result * 1000" | bc -l 2>/dev/null | awk '{printf "%.0f", $1}')
+        else
+            multi_thread_score=13313
+        fi
+        # 设置标记，表示有多线程测试结果
+        has_multi_thread=true
     else
-        multi_thread_score=13313
+        echo "单线程CPU，跳过多线程测试"
+        has_multi_thread=false
     fi
     
     echo "SysBench CPU测试完成"
@@ -196,16 +205,22 @@ run_sysbench_memory_test() {
     echo "正在执行SysBench 内存性能测试（快速模式）..."
     
     # 单线程读测试
-    echo "执行单线程内存读测试..."
+    echo "执行内存读测试..."
     memory_read_result=$(sysbench memory --threads=1 --memory-total-size=10G --memory-oper=read run 2>/dev/null | grep "MiB/sec" | awk '{print $4}')
-    if [ -z "$memory_read_result" ]; then
+    if [ -n "$memory_read_result" ]; then
+        # 提取数字部分（包括小数点），移除括号和其他非数字字符
+        memory_read_result=$(echo "$memory_read_result" | grep -oE '[0-9]+\.[0-9]+|[0-9]+')
+    else
         memory_read_result="36453.10"
     fi
     
     # 单线程写测试
-    echo "执行单线程内存写测试..."
+    echo "执行内存写测试..."
     memory_write_result=$(sysbench memory --threads=1 --memory-total-size=10G --memory-oper=write run 2>/dev/null | grep "MiB/sec" | awk '{print $4}')
-    if [ -z "$memory_write_result" ]; then
+    if [ -n "$memory_write_result" ]; then
+        # 提取数字部分（包括小数点），移除括号和其他非数字字符
+        memory_write_result=$(echo "$memory_write_result" | grep -oE '[0-9]+\.[0-9]+|[0-9]+')
+    else
         memory_write_result="22543.58"
     fi
     
@@ -220,8 +235,15 @@ perform_benchmarks() {
     if ! command -v sysbench &>/dev/null; then
         echo "sysbench 未安装，使用模拟数据进行测试显示..."
         # 设置模拟数据
+        logical_cores=$(nproc)
         single_thread_score=3306
-        multi_thread_score=13313
+        if [ "$logical_cores" -gt 1 ]; then
+            # 根据核心数生成合理的模拟多线程得分
+            multi_thread_score=$((single_thread_score * logical_cores * 85 / 100))
+            has_multi_thread=true
+        else
+            has_multi_thread=false
+        fi
         memory_read_result="36453.10"
         memory_write_result="22543.58"
     else
@@ -349,13 +371,21 @@ echo "地理位置:     $location"
 echo "系统时间:     $timezone $sys_time"
 echo "-------------"
 echo "运行时长:     $uptime_formatted"
+
+# 输出性能测试结果
 echo -e "\n${YELLOW}SysBench 性能测试结果${NC}"
 echo " 1 线程测试(单核)得分:          ${single_thread_score:-0} Scores"
-echo " ${cpu_cores} 线程测试(多核)得分:          ${multi_thread_score:-0} Scores"
+
+# 只有在有多线程测试结果时才显示多线程测试
+if [ "$has_multi_thread" = true ]; then
+    logical_cores=$(nproc)
+    echo " ${logical_cores} 线程测试(多核)得分:          ${multi_thread_score:-0} Scores"
+fi
+
 echo " SysBench 内存测试 (Fast Mode, 1-Pass @ 5sec)"
 echo "---------------------------------"
-echo " 单线程读测试:          ${memory_read_result:-0} MB/s"
-echo " 单线程写测试:          ${memory_write_result:-0} MB/s"
+echo " 内存读测试:          ${memory_read_result:-0} MB/s"
+echo " 内存写测试:          ${memory_write_result:-0} MB/s"
 echo "---------------------------------"
 
 
