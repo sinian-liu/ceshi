@@ -356,7 +356,7 @@ echo "-------------"
 echo "运行时长:     $uptime_formatted"
 
 # 输出性能测试结果
-echo -e "\n${YELLOW}SysBench 性能测试结果${NC}"
+echo -e "\n${YELLOW}系统性能基准测试结果${NC}"
 echo " 1 线程测试(单核)得分:          ${single_thread_score} Scores"
 
 # 只有在有多线程测试结果时才显示多线程测试
