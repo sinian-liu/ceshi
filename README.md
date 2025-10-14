@@ -5,3 +5,5 @@ bash <(curl -sL https://github.com/sinian-liu/ceshi//raw/main/ceshi.sh)
 ```
 wget https://raw.githubusercontent.com/sinian-liu/ceshi/main/ceshi.sh -O ceshi.sh && chmod +x ceshi.sh && ./ceshi.sh
 ```
+## Stargazers over time
+[![Stargazers over time](https://starchart.cc/MHSanaei/3x-ui.svg?variant=adaptive)](https://starchart.cc/MHSanaei/3x-ui)
