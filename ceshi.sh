@@ -1261,7 +1261,7 @@ EOF
                 echo -e "${RED}═══════════════════════════════════════════════════════════════════${RESET}"
                 
                 read -p "${YELLOW}确认了解这些严重限制并继续优化？(y/n): ${RESET}" confirm_warning
-                if ! [[ "$confirm_warning" == "y" || "$confirm_warning" == "Y" ]]; then
+                if [[ "$confirm_warning" != [yY] ]]; then
                     echo -e "${YELLOW}优化已取消${RESET}"
                     return
                 fi
