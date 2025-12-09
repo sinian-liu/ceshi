@@ -462,7 +462,7 @@ EOF
             
             # 使用场景选择
             echo ""
-            echo "=== 使用场景选择 (80%安全版) ==="
+            echo "=== 使用场景选择 ==="
             echo "1) 视频流媒体服务器"
             echo "2) 文件下载服务器"
             echo "3) 混合用途 (视频+下载)"
@@ -651,7 +651,7 @@ EOF
             # 创建自动恢复标记
             echo "optimization_applied=$(date)" > /tmp/.network_optimized
             
-            echo -e "${GREEN}✅ 80%安全优化配置已应用！${RESET}"
+            echo -e "${GREEN}✅ 优化配置已应用！${RESET}"
             echo -e "${YELLOW}正在立即重启系统...${RESET}"
             echo ""
             echo -e "${RED}如果重启后无法连接，请使用VNC或控制台执行:${RESET}"
