@@ -199,6 +199,7 @@ show_menu() {
                 read -p "按回车键返回主菜单..."
                 ;;
             2)
+2)
     # BBR 和 BBR v3 安装与管理
     echo -e "${GREEN}正在进入 BBR 和 BBR v3 安装与管理菜单...${RESET}"
     
@@ -225,84 +226,84 @@ show_menu() {
                     MEM_LEVEL="huge"
                 fi
                 
-                # 计算90%减配内存
-                SAFE_MEM_MB=$((TOTAL_MEM_MB * 90 / 100))
+                # 计算85%减配内存
+                SAFE_MEM_MB=$((TOTAL_MEM_MB * 85 / 100))
                 
                 # 返回所有信息
                 echo "${TOTAL_MEM_MB}:${MEM_LEVEL}:${SAFE_MEM_MB}"
             else
-                echo "1024:medium:921"
+                TOTAL_MEM_MB=1024
+                echo "1024:medium:870"
             fi
         }
         
-        # 2. 智能参数计算（真正的90%减配版）
+        # 2. 智能参数计算（85%减配版）
         calculate_smart_params() {
             local mem_mb=$1
             local scenario=$2
             local cpu_cores=$(nproc 2>/dev/null || echo 1)
             
-            # 基础连接数（真正的90%减配）
+            # 基础连接数（85%减配）
             case "$MEM_LEVEL" in
-                "tiny") BASE_CONN=450 ;;      # 原500的90%
-                "small") BASE_CONN=720 ;;     # 原800的90%
-                "medium") BASE_CONN=1152 ;;   # 原1280的90%
-                "large") BASE_CONN=1843 ;;    # 原2048的90%
-                "xlarge") BASE_CONN=3686 ;;   # 原4096的90%
-                "huge") BASE_CONN=7372 ;;     # 原8192的90%
-                *) BASE_CONN=1152 ;;
+                "tiny") BASE_CONN=425 ;;      # 原500的85%
+                "small") BASE_CONN=680 ;;     # 原800的85%
+                "medium") BASE_CONN=1088 ;;   # 原1280的85%
+                "large") BASE_CONN=1741 ;;    # 原2048的85%
+                "xlarge") BASE_CONN=3482 ;;   # 原4096的85%
+                "huge") BASE_CONN=6963 ;;     # 原8192的85%
+                *) BASE_CONN=1088 ;;
             esac
             
-            # 根据场景调整（保持90%原则）
+            # 根据场景调整（85%原则）
             case "$scenario" in
                 "video")
-                    MAX_CONN=$((BASE_CONN * 117 / 100))  # +17% 而不是30%
-                    BUFFER_KB=1382                       # 1.5MB的90%
-                    OPT_LEVEL=41                         # 45的90%
+                    MAX_CONN=$((BASE_CONN * 110 / 100))  # +10%
+                    BUFFER_KB=1300                       # 85%优化
                     ;;
                 "download")
-                    MAX_CONN=$((BASE_CONN * 104 / 100))  # +4% 而不是15%
-                    BUFFER_KB=691                        # 0.75MB的90%
-                    OPT_LEVEL=24                         # 27的90%
+                    MAX_CONN=$((BASE_CONN * 105 / 100))  # +5%
+                    BUFFER_KB=650                        # 85%优化
                     ;;
                 "mixed")
-                    MAX_CONN=$((BASE_CONN * 113 / 100))  # +13% 而不是25%
-                    BUFFER_KB=1037                       # 1.125MB的90%
-                    OPT_LEVEL=32                         # 35的90%
-                    ;;
-                "gaming")
-                    MAX_CONN=$((BASE_CONN * 105 / 100))  # +5%
-                    BUFFER_KB=691                        # 0.75MB的90%
-                    OPT_LEVEL=24                         # 27的90%
+                    MAX_CONN=$((BASE_CONN * 107 / 100))  # +7%
+                    BUFFER_KB=975                        # 85%优化
                     ;;
                 "balanced")
-                    MAX_CONN=$BASE_CONN                  # 保持90%
-                    BUFFER_KB=691                        # 0.75MB的90%
-                    OPT_LEVEL=24                         # 27的90%
+                    MAX_CONN=$BASE_CONN                  # 保持85%
+                    BUFFER_KB=650                        # 85%优化
                     ;;
                 *)
                     MAX_CONN=$BASE_CONN
-                    BUFFER_KB=461                        # 512的90%
-                    OPT_LEVEL=20                         # 22的90%
+                    BUFFER_KB=435                        # 512的85%
                     ;;
             esac
             
-            # CPU核心影响（降低影响）
-            MAX_CONN=$((MAX_CONN + (cpu_cores * 68)))    # 75的90%
+            # CPU核心影响（85%影响）
+            MAX_CONN=$((MAX_CONN + (cpu_cores * 64)))    # 75的85%
             
-            # 安全上限
-            if [ "$MAX_CONN" -gt 65535 ]; then
-                MAX_CONN=65535
+            # 安全上限（保留15%余量）
+            ABSOLUTE_MAX=57344  # 65535的85%
+            if [ "$MAX_CONN" -gt "$ABSOLUTE_MAX" ]; then
+                MAX_CONN=$ABSOLUTE_MAX
             fi
             
-            # 文件描述符限制（90%原则）
-            FILE_MAX=$((MAX_CONN * 4))
-            [ "$FILE_MAX" -gt 117965 ] && FILE_MAX=117965  # 131072的90%
-            [ "$FILE_MAX" -lt 18432 ] && FILE_MAX=18432    # 20480的90%
+            # 最低保障连接数
+            MIN_CONN=512
+            if [ "$MAX_CONN" -lt "$MIN_CONN" ]; then
+                MAX_CONN=$MIN_CONN
+            fi
             
-            # 缓冲区大小（90%原则）
+            # 文件描述符限制（85%原则）
+            FILE_MAX=$((MAX_CONN * 3))  # 原4的85%
+            MAX_FILE_LIMIT=111411  # 131072的85%
+            MIN_FILE_LIMIT=17408   # 20480的85%
+            [ "$FILE_MAX" -gt "$MAX_FILE_LIMIT" ] && FILE_MAX=$MAX_FILE_LIMIT
+            [ "$FILE_MAX" -lt "$MIN_FILE_LIMIT" ] && FILE_MAX=$MIN_FILE_LIMIT
+            
+            # 缓冲区大小（85%原则）
             BUFFER_SIZE=$((BUFFER_KB * 1024))
             
-            echo "$MAX_CONN:$BUFFER_SIZE:$FILE_MAX:$OPT_LEVEL"
+            echo "$MAX_CONN:$BUFFER_SIZE:$FILE_MAX"
         }
         
         # 3. 检查内核版本是否支持 BBR v3
@@ -313,7 +314,7 @@ show_menu() {
             if [[ $major_version -lt 5 || ($major_version -eq 5 && $minor_version -lt 6) ]]; then
                 echo -e "${RED}当前内核版本 $kernel_version 不支持 BBR v3！${RESET}"
                 if [ -f /etc/centos-release ] && grep -q "CentOS Linux release 7" /etc/centos-release; then
-                    echo -e "${YELLOW}CentOS 7 默认内核（3.10）不支持 BBR v3，建议升级到 5.6 或更高版本（如通过 'yum install kernel'）。${RESET}"
+                    echo -e "${YELLOW}CentOS 7 默认内核（3.10）不支持 BBR v3，建议升级到 5.6 或更高版本。${RESET}"
                 else
                     echo -e "${YELLOW}请手动升级内核到 5.6 或更高版本！${RESET}"
                 fi
@@ -334,8 +335,7 @@ show_menu() {
                     return 1
                 fi
             else
-                echo -e "${RED}BBR v3 模块 (tcp_bbr) 未找到，可能内核不支持或模块缺失！${RESET}"
-                echo -e "${YELLOW}请确认内核版本 >= 5.6，并检查模块路径。${RESET}"
+                echo -e "${RED}BBR v3 模块 (tcp_bbr) 未找到，可能内核不支持！${RESET}"
                 return 1
             fi
             current_congestion=$(sysctl -n net.ipv4.tcp_congestion_control)
@@ -343,7 +343,6 @@ show_menu() {
                 echo -e "${PURPLE}拥塞控制算法已设置为 BBR，BBR v3 已成功启动。${RESET}"
             else
                 echo -e "${RED}当前拥塞控制算法为 $current_congestion，BBR v3 未成功启动。${RESET}"
-                echo -e "${YELLOW}建议：运行 'sudo sysctl -w net.ipv4.tcp_congestion_control=bbr'。${RESET}"
                 return 1
             fi
             sysctl_file="/etc/sysctl.conf"
@@ -362,10 +361,7 @@ show_menu() {
             if [[ $(echo "$bbr_versions" | wc -l) -gt 1 ]]; then
                 echo -e "${RED}系统存在多个 BBR 版本：${RESET}"
                 echo "$bbr_versions"
-                read -p "是否卸载其他版本并保留当前版本？(y/n): " choice
-                if [[ $choice == "y" || $choice == "Y" ]]; then
-                    echo "功能开发中..."
-                fi
+                echo -e "${YELLOW}建议保持当前版本。${RESET}"
             else
                 echo -e "${YELLOW}没有发现多个 BBR 版本。${RESET}"
             fi
@@ -376,12 +372,13 @@ show_menu() {
             echo -e "${YELLOW}正在安装 BBR v3...${RESET}"
             sudo modprobe tcp_bbr
             if [ $? -ne 0 ]; then
-                echo -e "${RED}加载 tcp_bbr 模块失败，请检查内核支持！${RESET}"
+                echo -e "${RED}加载 tcp_bbr 模块失败！${RESET}"
                 return 1
             fi
             sysctl_file="/etc/sysctl.conf"
             [ -f /etc/centos-release ] && sysctl_file="/etc/sysctl.d/99-bbr.conf"
             echo "net.ipv4.tcp_congestion_control = bbr" | sudo tee -a "$sysctl_file"
+            echo "net.core.default_qdisc = fq" | sudo tee -a "$sysctl_file"
             sudo sysctl -p "$sysctl_file"
             if [ $? -eq 0 ]; then
                 echo -e "${GREEN}BBR v3 配置已应用！${RESET}"
@@ -435,7 +432,7 @@ show_menu() {
             fi
         }
         
-        # 10. 一键网络优化配置（增强版）- 立即重启版本
+        # 10. 一键网络优化配置（85%安全版）
         apply_enhanced_network_optimizations() {
             echo -e "${YELLOW}正在应用增强版网络优化配置...${RESET}"
             
@@ -447,53 +444,91 @@ show_menu() {
             
             # 使用场景选择
             echo ""
-            echo "=== 使用场景选择 ==="
+            echo "=== 使用场景选择 (85%优化版) ==="
             echo "1) 视频流媒体服务器 (多人同时观看/直播)"
             echo "2) 文件下载服务器 (大文件传输/下载站)"
             echo "3) 混合用途 (视频流媒体 + 文件下载)"
-            echo "4) 游戏服务器 (低延迟高响应)"
-            echo "5) 平衡模式 (通用优化 - 推荐)"
-            echo "6) 返回"
-            read -p "请选择 [1-6]: " scenario_choice
+            echo "4) 平衡模式 (通用优化 - 推荐)"
+            echo "5) 返回"
+            read -p "请选择 [1-5]: " scenario_choice
             
             case $scenario_choice in
                 1) 
                     SCENARIO="video"
-                    SCENARIO_DESC="视频流媒体服务器 (支持多人同时观看)"
+                    SCENARIO_DESC="视频流媒体服务器"
                     ;;
                 2) 
                     SCENARIO="download"
-                    SCENARIO_DESC="文件下载服务器 (大文件传输优化)"
+                    SCENARIO_DESC="文件下载服务器"
                     ;;
                 3) 
                     SCENARIO="mixed"
                     SCENARIO_DESC="混合用途服务器 (视频流 + 文件下载)"
                     ;;
                 4) 
-                    SCENARIO="gaming"
-                    SCENARIO_DESC="游戏服务器 (低延迟高响应优化)"
-                    ;;
-                5) 
                     SCENARIO="balanced"
-                    SCENARIO_DESC="平衡模式 (通用优化)"
+                    SCENARIO_DESC="平衡模式"
                     ;;
-                6) return ;;
-                *) SCENARIO="balanced" ;;
+                5) return ;;
+                *) 
+                    SCENARIO="balanced"
+                    SCENARIO_DESC="平衡模式"
+                    ;;
             esac
             
-            # 计算智能参数
+            # 计算智能参数（85%安全版）
             PARAMS=$(calculate_smart_params "$SAFE_MEM_MB" "$SCENARIO")
             MAX_CONN=$(echo "$PARAMS" | cut -d: -f1)
             BUFFER_SIZE=$(echo "$PARAMS" | cut -d: -f2)
             FILE_MAX=$(echo "$PARAMS" | cut -d: -f3)
             
+            # 根据内存计算TCP内存参数（85%原则）
+            case "$MEM_LEVEL" in
+                "tiny")
+                    TCP_MEM_MIN=4096      # 85%安全
+                    TCP_MEM_DEFAULT=8192
+                    TCP_MEM_MAX=12288
+                    ;;
+                "small")
+                    TCP_MEM_MIN=8192
+                    TCP_MEM_DEFAULT=16384
+                    TCP_MEM_MAX=24576
+                    ;;
+                "medium")
+                    TCP_MEM_MIN=16384
+                    TCP_MEM_DEFAULT=32768
+                    TCP_MEM_MAX=49152
+                    ;;
+                "large")
+                    TCP_MEM_MIN=32768
+                    TCP_MEM_DEFAULT=65536
+                    TCP_MEM_MAX=98304
+                    ;;
+                "xlarge")
+                    TCP_MEM_MIN=65536
+                    TCP_MEM_DEFAULT=131072
+                    TCP_MEM_MAX=196608
+                    ;;
+                "huge")
+                    TCP_MEM_MIN=131072
+                    TCP_MEM_DEFAULT=262144
+                    TCP_MEM_MAX=393216
+                    ;;
+                *)
+                    TCP_MEM_MIN=16384
+                    TCP_MEM_DEFAULT=32768
+                    TCP_MEM_MAX=49152
+                    ;;
+            esac
+            
             # 显示优化方案
             echo ""
-            echo "=== 优化方案详情 ==="
+            echo "=== 优化方案详情 (85%安全版) ==="
             echo "服务器配置: ${TOTAL_MEM_MB}MB 内存 / $(nproc)核 CPU"
+            echo "安全内存: ${SAFE_MEM_MB}MB (85%原则)"
             echo "使用场景: ${SCENARIO_DESC}"
             echo "最大连接数: $MAX_CONN"
-            echo "文件描述符限制: $FILE_MAX"
+            echo "文件描述符: $FILE_MAX"
             echo "TCP缓冲区: $((BUFFER_SIZE / 1024))KB"
             
             # 显示混合用途的明确说明
@@ -503,6 +538,7 @@ show_menu() {
                 echo "• 视频流媒体: 优化多人观看体验"
                 echo "• 文件下载: 提高大文件传输速度"
                 echo "• 平衡分配: 自动调节带宽使用"
+                echo "• 安全余量: 保留15%系统资源"
             fi
             
             # 安全警告
@@ -529,11 +565,12 @@ show_menu() {
             cp /etc/sysctl.conf "$BACKUP_FILE" 2>/dev/null || true
             echo -e "${YELLOW}配置已备份到: $BACKUP_FILE${RESET}"
             
-            # 生成优化配置
-            cat > /tmp/enhanced_optimization.conf << EOF
-# 增强版网络优化配置
+            # 生成85%安全优化配置
+            cat > /tmp/optimization_85.conf << EOF
+# 85%安全版网络优化配置
 # 生成时间: $(date)
-# 内存: ${TOTAL_MEM_MB}MB
+# 内存: ${TOTAL_MEM_MB}MB (${MEM_LEVEL})
+# 安全内存: ${SAFE_MEM_MB}MB (85%)
 # 场景: ${SCENARIO_DESC}
 
 # 基础优化
@@ -541,20 +578,18 @@ net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 net.ipv4.tcp_fastopen = 3
 
-# 连接管理
+# 连接管理（85%安全）
 net.core.somaxconn = $MAX_CONN
 net.ipv4.tcp_max_syn_backlog = $MAX_CONN
 net.ipv4.tcp_max_tw_buckets = $((MAX_CONN * 2))
 net.ipv4.tcp_tw_reuse = 1
-net.ipv4.tcp_fin_timeout = 15
-net.ipv4.tcp_syn_retries = 3
-net.ipv4.tcp_synack_retries = 3
+net.ipv4.tcp_fin_timeout = 30
 
 # 文件描述符
 fs.file-max = $FILE_MAX
 fs.nr_open = $FILE_MAX
 
-# TCP缓冲区
+# TCP缓冲区（85%安全）
 net.core.rmem_max = $BUFFER_SIZE
 net.core.wmem_max = $BUFFER_SIZE
 net.core.rmem_default = $((BUFFER_SIZE / 2))
@@ -562,25 +597,31 @@ net.core.wmem_default = $((BUFFER_SIZE / 2))
 net.ipv4.tcp_rmem = 4096 $((BUFFER_SIZE / 2)) $BUFFER_SIZE
 net.ipv4.tcp_wmem = 4096 $((BUFFER_SIZE / 2)) $BUFFER_SIZE
 
-# TCP内存设置
-net.ipv4.tcp_mem = $((BUFFER_SIZE / 2)) $BUFFER_SIZE $((BUFFER_SIZE * 2))
+# TCP内存（85%安全）
+net.ipv4.tcp_mem = $TCP_MEM_MIN $TCP_MEM_DEFAULT $TCP_MEM_MAX
 
 # 端口范围
-net.ipv4.ip_local_port_range = 10000 65535
+net.ipv4.ip_local_port_range = 10240 65535
 
 # TCP优化
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_synack_retries = 2
+net.ipv4.tcp_syn_retries = 3
+net.ipv4.tcp_keepalive_time = 1200
+net.ipv4.tcp_keepalive_probes = 5
+net.ipv4.tcp_keepalive_intvl = 15
 net.ipv4.tcp_ecn = 1
 net.ipv4.tcp_no_metrics_save = 1
 net.ipv4.tcp_slow_start_after_idle = 0
-net.ipv4.tcp_mtu_probing = 1
+
+# 网络设备队列
+net.core.netdev_max_backlog = $((MAX_CONN / 2))
 
 # 根据场景优化
 $(if [[ "$SCENARIO" == "video" || "$SCENARIO" == "mixed" ]]; then
 echo "# 视频流优化"
 echo "net.ipv4.tcp_notsent_lowat = 16384"
 echo "net.ipv4.tcp_low_latency = 1"
-echo "net.core.busy_poll = 50"
-echo "net.core.busy_read = 50"
 fi)
 
 $(if [[ "$SCENARIO" == "download" ]]; then
@@ -588,33 +629,26 @@ echo "# 下载优化"
 echo "net.ipv4.tcp_window_scaling = 1"
 echo "net.ipv4.tcp_timestamps = 1"
 fi)
-
-$(if [[ "$SCENARIO" == "gaming" ]]; then
-echo "# 游戏优化"
-echo "net.ipv4.tcp_low_latency = 1"
-echo "net.ipv4.tcp_timestamps = 1"
-echo "net.ipv4.tcp_sack = 1"
-echo "net.ipv4.tcp_fack = 1"
-fi)
 EOF
             
             # 应用配置
-            echo -e "${YELLOW}正在应用配置...${RESET}"
-            cp /tmp/enhanced_optimization.conf "$sysctl_file"
+            echo -e "${YELLOW}正在应用85%安全优化配置...${RESET}"
+            cp /tmp/optimization_85.conf "$sysctl_file"
             
             # 临时应用配置
             sysctl -p "$sysctl_file" >/dev/null 2>&1
             
             # 设置文件描述符限制
             LIMITS_FILE="/etc/security/limits.conf"
-            # 移除旧限制
-            sed -i '/nofile/d' "$LIMITS_FILE" 2>/dev/null
             echo "* soft nofile $FILE_MAX" | sudo tee -a "$LIMITS_FILE" >/dev/null
             echo "* hard nofile $FILE_MAX" | sudo tee -a "$LIMITS_FILE" >/dev/null
             
-            echo -e "${GREEN}✅ 优化配置已应用！${RESET}"
+            echo -e "${GREEN}✅ 85%安全优化配置已应用！${RESET}"
             echo -e "${YELLOW}正在立即重启系统...${RESET}"
-            echo -e "${GREEN}如果无法连接，配置已备份到: $BACKUP_FILE${RESET}"
+            echo -e "${GREEN}如果无法连接，恢复命令:${RESET}"
+            echo -e "  cp $BACKUP_FILE /etc/sysctl.conf"
+            echo -e "  sysctl -p"
+            echo -e "  reboot"
             
             # 立即重启
             sudo reboot
