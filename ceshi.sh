@@ -269,6 +269,11 @@ show_menu() {
                     BUFFER_KB=1037                       # 1.125MB的90%
                     OPT_LEVEL=32                         # 35的90%
                     ;;
+                "gaming")
+                    MAX_CONN=$((BASE_CONN * 105 / 100))  # +5%
+                    BUFFER_KB=691                        # 0.75MB的90%
+                    OPT_LEVEL=24                         # 27的90%
+                    ;;
                 "balanced")
                     MAX_CONN=$BASE_CONN                  # 保持90%
                     BUFFER_KB=691                        # 0.75MB的90%
@@ -430,7 +435,7 @@ show_menu() {
             fi
         }
         
-        # 10. 一键网络优化配置（增强版）
+        # 10. 一键网络优化配置（增强版）- 立即重启版本
         apply_enhanced_network_optimizations() {
             echo -e "${YELLOW}正在应用增强版网络优化配置...${RESET}"
             
@@ -443,19 +448,36 @@ show_menu() {
             # 使用场景选择
             echo ""
             echo "=== 使用场景选择 ==="
-            echo "1) 视频流媒体服务器"
-            echo "2) 文件下载服务器"
-            echo "3) 混合用途"
-            echo "4) 平衡模式 (推荐)"
-            echo "5) 返回"
-            read -p "请选择 [1-5]: " scenario_choice
+            echo "1) 视频流媒体服务器 (多人同时观看/直播)"
+            echo "2) 文件下载服务器 (大文件传输/下载站)"
+            echo "3) 混合用途 (视频流媒体 + 文件下载)"
+            echo "4) 游戏服务器 (低延迟高响应)"
+            echo "5) 平衡模式 (通用优化 - 推荐)"
+            echo "6) 返回"
+            read -p "请选择 [1-6]: " scenario_choice
             
             case $scenario_choice in
-                1) SCENARIO="video" ;;
-                2) SCENARIO="download" ;;
-                3) SCENARIO="mixed" ;;
-                4) SCENARIO="balanced" ;;
-                5) return ;;
+                1) 
+                    SCENARIO="video"
+                    SCENARIO_DESC="视频流媒体服务器 (支持多人同时观看)"
+                    ;;
+                2) 
+                    SCENARIO="download"
+                    SCENARIO_DESC="文件下载服务器 (大文件传输优化)"
+                    ;;
+                3) 
+                    SCENARIO="mixed"
+                    SCENARIO_DESC="混合用途服务器 (视频流 + 文件下载)"
+                    ;;
+                4) 
+                    SCENARIO="gaming"
+                    SCENARIO_DESC="游戏服务器 (低延迟高响应优化)"
+                    ;;
+                5) 
+                    SCENARIO="balanced"
+                    SCENARIO_DESC="平衡模式 (通用优化)"
+                    ;;
+                6) return ;;
                 *) SCENARIO="balanced" ;;
             esac
             
@@ -468,14 +490,33 @@ show_menu() {
             # 显示优化方案
             echo ""
             echo "=== 优化方案详情 ==="
-            echo "内存: ${TOTAL_MEM_MB}MB"
-            echo "用途: ${SCENARIO}"
+            echo "服务器配置: ${TOTAL_MEM_MB}MB 内存 / $(nproc)核 CPU"
+            echo "使用场景: ${SCENARIO_DESC}"
             echo "最大连接数: $MAX_CONN"
+            echo "文件描述符限制: $FILE_MAX"
+            echo "TCP缓冲区: $((BUFFER_SIZE / 1024))KB"
             
-            # 确认应用
-            read -p "是否应用此优化方案？(y/N): " confirm
+            # 显示混合用途的明确说明
+            if [ "$SCENARIO" = "mixed" ]; then
+                echo ""
+                echo -e "${YELLOW}混合用途说明：${RESET}"
+                echo "• 视频流媒体: 优化多人观看体验"
+                echo "• 文件下载: 提高大文件传输速度"
+                echo "• 平衡分配: 自动调节带宽使用"
+            fi
+            
+            # 安全警告
+            echo ""
+            echo -e "${RED}⚠️  警告：此操作将立即重启系统！${RESET}"
+            echo "• 所有未保存的工作将丢失"
+            echo "• SSH连接将中断"
+            echo "• 重启后需要重新连接"
+            
+            # 最终确认
+            echo ""
+            read -p "确认应用优化并立即重启系统？(y/N): " confirm
             if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-                echo "已取消优化"
+                echo -e "${YELLOW}已取消优化${RESET}"
                 return
             fi
             
@@ -491,19 +532,92 @@ show_menu() {
             # 生成优化配置
             cat > /tmp/enhanced_optimization.conf << EOF
 # 增强版网络优化配置
+# 生成时间: $(date)
+# 内存: ${TOTAL_MEM_MB}MB
+# 场景: ${SCENARIO_DESC}
+
+# 基础优化
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_fastopen = 3
+
+# 连接管理
 net.core.somaxconn = $MAX_CONN
 net.ipv4.tcp_max_syn_backlog = $MAX_CONN
+net.ipv4.tcp_max_tw_buckets = $((MAX_CONN * 2))
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 15
+net.ipv4.tcp_syn_retries = 3
+net.ipv4.tcp_synack_retries = 3
+
+# 文件描述符
 fs.file-max = $FILE_MAX
+fs.nr_open = $FILE_MAX
+
+# TCP缓冲区
+net.core.rmem_max = $BUFFER_SIZE
+net.core.wmem_max = $BUFFER_SIZE
+net.core.rmem_default = $((BUFFER_SIZE / 2))
+net.core.wmem_default = $((BUFFER_SIZE / 2))
+net.ipv4.tcp_rmem = 4096 $((BUFFER_SIZE / 2)) $BUFFER_SIZE
+net.ipv4.tcp_wmem = 4096 $((BUFFER_SIZE / 2)) $BUFFER_SIZE
+
+# TCP内存设置
+net.ipv4.tcp_mem = $((BUFFER_SIZE / 2)) $BUFFER_SIZE $((BUFFER_SIZE * 2))
+
+# 端口范围
+net.ipv4.ip_local_port_range = 10000 65535
+
+# TCP优化
+net.ipv4.tcp_ecn = 1
+net.ipv4.tcp_no_metrics_save = 1
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_mtu_probing = 1
+
+# 根据场景优化
+$(if [[ "$SCENARIO" == "video" || "$SCENARIO" == "mixed" ]]; then
+echo "# 视频流优化"
+echo "net.ipv4.tcp_notsent_lowat = 16384"
+echo "net.ipv4.tcp_low_latency = 1"
+echo "net.core.busy_poll = 50"
+echo "net.core.busy_read = 50"
+fi)
+
+$(if [[ "$SCENARIO" == "download" ]]; then
+echo "# 下载优化"
+echo "net.ipv4.tcp_window_scaling = 1"
+echo "net.ipv4.tcp_timestamps = 1"
+fi)
+
+$(if [[ "$SCENARIO" == "gaming" ]]; then
+echo "# 游戏优化"
+echo "net.ipv4.tcp_low_latency = 1"
+echo "net.ipv4.tcp_timestamps = 1"
+echo "net.ipv4.tcp_sack = 1"
+echo "net.ipv4.tcp_fack = 1"
+fi)
 EOF
             
             # 应用配置
+            echo -e "${YELLOW}正在应用配置...${RESET}"
             cp /tmp/enhanced_optimization.conf "$sysctl_file"
-            sysctl -p "$sysctl_file" 2>/dev/null
             
-            echo -e "${GREEN}✅ 增强版网络优化配置已应用！${RESET}"
-            echo -e "${YELLOW}部分配置需要重启才能完全生效。${RESET}"
+            # 临时应用配置
+            sysctl -p "$sysctl_file" >/dev/null 2>&1
+            
+            # 设置文件描述符限制
+            LIMITS_FILE="/etc/security/limits.conf"
+            # 移除旧限制
+            sed -i '/nofile/d' "$LIMITS_FILE" 2>/dev/null
+            echo "* soft nofile $FILE_MAX" | sudo tee -a "$LIMITS_FILE" >/dev/null
+            echo "* hard nofile $FILE_MAX" | sudo tee -a "$LIMITS_FILE" >/dev/null
+            
+            echo -e "${GREEN}✅ 优化配置已应用！${RESET}"
+            echo -e "${YELLOW}正在立即重启系统...${RESET}"
+            echo -e "${GREEN}如果无法连接，配置已备份到: $BACKUP_FILE${RESET}"
+            
+            # 立即重启
+            sudo reboot
         }
         
         # ========== BBR 管理菜单 ==========
