@@ -225,7 +225,7 @@ show_menu() {
                     MEM_LEVEL="huge"
                 fi
                 
-                # 计算80%减配内存
+                # 计算安全内存
                 SAFE_MEM_MB=$((TOTAL_MEM_MB * 80 / 100))
                 
                 # 返回所有信息
@@ -235,70 +235,70 @@ show_menu() {
             fi
         }
         
-        # 2. 智能参数计算（80%减配版）
+        # 2. 智能参数计算
         calculate_smart_params() {
             local mem_mb=$1
             local scenario=$2
             local cpu_cores=$(nproc 2>/dev/null || echo 1)
             
-            # 基础连接数（80%减配）
+            # 基础连接数
             case "$MEM_LEVEL" in
-                "tiny") BASE_CONN=400 ;;      # 原500的80%
-                "small") BASE_CONN=640 ;;     # 原800的80%
-                "medium") BASE_CONN=1024 ;;   # 原1280的80%
-                "large") BASE_CONN=1638 ;;    # 原2048的80%
-                "xlarge") BASE_CONN=3277 ;;   # 原4096的80%
-                "huge") BASE_CONN=6554 ;;     # 原8192的80%
+                "tiny") BASE_CONN=400 ;;
+                "small") BASE_CONN=640 ;;
+                "medium") BASE_CONN=1024 ;;
+                "large") BASE_CONN=1638 ;;
+                "xlarge") BASE_CONN=3277 ;;
+                "huge") BASE_CONN=6554 ;;
                 *) BASE_CONN=1024 ;;
             esac
             
-            # 根据场景调整（最小调整）
+            # 根据场景调整
             case "$scenario" in
                 "video")
-                    MAX_CONN=$((BASE_CONN * 105 / 100))  # +5%
-                    BUFFER_KB=1229                       # 80%优化
+                    MAX_CONN=$((BASE_CONN * 105 / 100))
+                    BUFFER_KB=1229
                     ;;
                 "download")
-                    MAX_CONN=$((BASE_CONN * 102 / 100))  # +2%
-                    BUFFER_KB=614                        # 80%优化
+                    MAX_CONN=$((BASE_CONN * 102 / 100))
+                    BUFFER_KB=614
                     ;;
                 "mixed")
-                    MAX_CONN=$((BASE_CONN * 103 / 100))  # +3%
-                    BUFFER_KB=922                        # 80%优化
+                    MAX_CONN=$((BASE_CONN * 103 / 100))
+                    BUFFER_KB=922
                     ;;
                 "balanced")
-                    MAX_CONN=$BASE_CONN                  # 保持80%
-                    BUFFER_KB=614                        # 80%优化
+                    MAX_CONN=$BASE_CONN
+                    BUFFER_KB=614
                     ;;
                 *)
                     MAX_CONN=$BASE_CONN
-                    BUFFER_KB=410                        # 512的80%
+                    BUFFER_KB=410
                     ;;
             esac
             
-            # CPU核心影响（80%影响）
-            MAX_CONN=$((MAX_CONN + (cpu_cores * 60)))    # 75的80%
+            # CPU核心影响
+            MAX_CONN=$((MAX_CONN + (cpu_cores * 60)))
             
-            # 安全上限（80%余量）
-            ABSOLUTE_MAX=52428  # 65535的80%
-            if [ "$MAX_CONN" -gt "$ABSOLUTE_MAX" ]; then
-                MAX_CONN=$ABSOLUTE_MAX
+            # 安全上限
+            if [ "$MAX_CONN" -gt 52428 ]; then
+                MAX_CONN=52428
             fi
             
             # 最低保障连接数
-            MIN_CONN=256
-            if [ "$MAX_CONN" -lt "$MIN_CONN" ]; then
-                MAX_CONN=$MIN_CONN
+            if [ "$MAX_CONN" -lt 256 ]; then
+                MAX_CONN=256
             fi
             
-            # 文件描述符限制（80%原则）
-            FILE_MAX=$((MAX_CONN * 2))  # 更保守
-            MAX_FILE_LIMIT=104857       # 131072的80%
-            MIN_FILE_LIMIT=16384        # 20480的80%
-            [ "$FILE_MAX" -gt "$MAX_FILE_LIMIT" ] && FILE_MAX=$MAX_FILE_LIMIT
-            [ "$FILE_MAX" -lt "$MIN_FILE_LIMIT" ] && FILE_MAX=$MIN_FILE_LIMIT
+            # 文件描述符限制
+            FILE_MAX=$((MAX_CONN * 2))
+            if [ "$FILE_MAX" -gt 104857 ]; then
+                FILE_MAX=104857
+            fi
+            if [ "$FILE_MAX" -lt 16384 ]; then
+                FILE_MAX=16384
+            fi
             
-            # 缓冲区大小（80%原则）
+            # 缓冲区大小
             BUFFER_SIZE=$((BUFFER_KB * 1024))
             
             echo "$MAX_CONN:$BUFFER_SIZE:$FILE_MAX"
@@ -418,12 +418,76 @@ show_menu() {
             fi
         }
         
-        # 9. 创建安全恢复脚本（如果重启失败）
-        create_recovery_script() {
+        # 9. 一键网络优化配置（针对视频播放、文件下载、多用户 VPS）
+        apply_network_optimizations() {
+            echo -e "${YELLOW}正在应用一键网络优化配置（优化视频播放、文件下载和多用户 VPS）...${RESET}"
+            sysctl_file="/etc/sysctl.conf"
+            [ -f /etc/centos-release ] && sysctl_file="/etc/sysctl.d/99-bbr.conf"
+            
+            # 备份原配置
+            BACKUP_FILE="/etc/sysctl.conf.backup.$(date +%Y%m%d%H%M%S)"
+            cp /etc/sysctl.conf "$BACKUP_FILE" 2>/dev/null || true
+            
+            echo "net.core.default_qdisc = fq" | sudo tee -a "$sysctl_file"
+            echo "net.ipv4.tcp_congestion_control = bbr" | sudo tee -a "$sysctl_file"
+            echo "net.core.somaxconn = 4096" | sudo tee -a "$sysctl_file"
+            echo "net.ipv4.tcp_max_syn_backlog = 2048" | sudo tee -a "$sysctl_file"
+            echo "net.ipv4.tcp_fin_timeout = 30" | sudo tee -a "$sysctl_file"
+            echo "net.ipv4.tcp_keepalive_time = 600" | sudo tee -a "$sysctl_file"
+            echo "net.ipv4.ip_local_port_range = 1024 65535" | sudo tee -a "$sysctl_file"
+            echo "fs.file-max = 2097152" | sudo tee -a "$sysctl_file"
+            echo "net.core.netdev_max_backlog = 4096" | sudo tee -a "$sysctl_file"
+            echo "net.ipv4.tcp_fastopen = 3" | sudo tee -a "$sysctl_file"
+            echo "net.core.rmem_max = 16777216" | sudo tee -a "$sysctl_file"
+            echo "net.core.wmem_max = 16777216" | sudo tee -a "$sysctl_file"
+            echo "net.ipv4.tcp_rmem = 4096 87380 16777216" | sudo tee -a "$sysctl_file"
+            echo "net.ipv4.tcp_wmem = 4096 65536 16777216" | sudo tee -a "$sysctl_file"
+            echo "net.ipv4.tcp_max_tw_buckets = 20000" | sudo tee -a "$sysctl_file"
+            echo "net.ipv4.tcp_tw_reuse = 1" | sudo tee -a "$sysctl_file"
+            
+            sudo sysctl -p "$sysctl_file"
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}网络优化配置已应用！${RESET}"
+            else
+                echo -e "${RED}应用网络优化配置失败，请手动检查 $sysctl_file！${RESET}"
+                return 1
+            fi
+            
+            limits_file="/etc/security/limits.conf"
+            [ -f /etc/centos-release ] && limits_file="/etc/security/limits.d/99-custom.conf"
+            if ! grep -q "nofile 1048576" "$limits_file"; then
+                echo "* soft nofile 1048576" | sudo tee -a "$limits_file"
+                echo "* hard nofile 1048576" | sudo tee -a "$limits_file"
+                echo -e "${GREEN}已更新 $limits_file 以设置文件描述符限制。${RESET}"
+            else
+                echo -e "${YELLOW}文件描述符限制已在 $limits_file 中配置，无需重复设置。${RESET}"
+            fi
+            
+            ulimit -n 1048576
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}临时文件描述符限制已设置为 1048576。${RESET}"
+            else
+                echo -e "${RED}设置临时文件描述符限制失败，请检查权限！${RESET}"
+            fi
+            
+            echo -e "${GREEN}一键网络优化完成！${RESET}"
+            read -p "是否立即重启系统以确保配置生效？(y/n): " reboot_choice
+            if [[ $reboot_choice == "y" || $reboot_choice == "Y" ]]; then
+                echo -e "${YELLOW}正在重启系统...${RESET}"
+                sudo reboot
+            else
+                echo -e "${YELLOW}请稍后手动运行 'sudo reboot' 重启系统以确保配置生效。${RESET}"
+            fi
+        }
+        
+        # 10. 增强网络优化配置
+        apply_enhanced_network_optimizations() {
+            echo -e "${YELLOW}正在应用增强网络优化配置...${RESET}"
+            
+            # 创建恢复脚本
             cat > /tmp/recovery_network.sh << 'EOF'
 #!/bin/bash
 echo "正在恢复网络配置..."
-# 恢复默认sysctl配置
 cat > /etc/sysctl.conf << 'CONF_EOF'
 # 默认网络配置
 net.ipv4.tcp_congestion_control = cubic
@@ -444,15 +508,6 @@ echo "网络配置已恢复，建议重启系统..."
 echo "执行: reboot"
 EOF
             chmod +x /tmp/recovery_network.sh
-            echo -e "${YELLOW}恢复脚本已创建: /tmp/recovery_network.sh${RESET}"
-        }
-        
-        # 10. 一键网络优化配置（80%极安全版）
-        apply_enhanced_network_optimizations() {
-            echo -e "${YELLOW}正在应用增强版网络优化配置...${RESET}"
-            
-            # 创建恢复脚本
-            create_recovery_script
             
             # 检测系统内存
             MEM_INFO=$(detect_system_memory)
@@ -494,16 +549,16 @@ EOF
                     ;;
             esac
             
-            # 计算智能参数（80%极安全版）
+            # 计算智能参数
             PARAMS=$(calculate_smart_params "$SAFE_MEM_MB" "$SCENARIO")
             MAX_CONN=$(echo "$PARAMS" | cut -d: -f1)
             BUFFER_SIZE=$(echo "$PARAMS" | cut -d: -f2)
             FILE_MAX=$(echo "$PARAMS" | cut -d: -f3)
             
-            # 根据内存计算TCP内存参数（80%原则）
+            # 根据内存计算TCP内存参数
             case "$MEM_LEVEL" in
                 "tiny")
-                    TCP_MEM_MIN=3072      # 80%安全
+                    TCP_MEM_MIN=3072
                     TCP_MEM_DEFAULT=6144
                     TCP_MEM_MAX=9216
                     ;;
@@ -541,9 +596,8 @@ EOF
             
             # 显示优化方案
             echo ""
-            echo "=== 优化方案详情 (80%极安全版) ==="
+            echo "=== 优化方案详情 ==="
             echo "服务器配置: ${TOTAL_MEM_MB}MB 内存"
-            echo "安全内存: ${SAFE_MEM_MB}MB (80%原则)"
             echo "使用场景: ${SCENARIO_DESC}"
             echo "最大连接数: $MAX_CONN"
             echo "文件描述符: $FILE_MAX"
@@ -578,19 +632,18 @@ EOF
             cp /etc/sysctl.conf "$BACKUP_FILE" 2>/dev/null || true
             echo -e "${YELLOW}配置已备份到: $BACKUP_FILE${RESET}"
             
-            # 生成80%极安全优化配置
-            cat > /tmp/optimization_80.conf << EOF
-# 80%极安全版网络优化配置
+            # 生成优化配置
+            cat > /tmp/enhanced_optimization.conf << EOF
+# 增强网络优化配置
 # 生成时间: $(date)
 # 内存: ${TOTAL_MEM_MB}MB
-# 安全内存: ${SAFE_MEM_MB}MB (80%)
 # 场景: ${SCENARIO_DESC}
 
 # 基础优化
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 
-# 连接管理（80%安全）
+# 连接管理
 net.core.somaxconn = $MAX_CONN
 net.ipv4.tcp_max_syn_backlog = $MAX_CONN
 net.ipv4.tcp_max_tw_buckets = $MAX_CONN
@@ -599,13 +652,13 @@ net.ipv4.tcp_tw_reuse = 1
 # 文件描述符
 fs.file-max = $FILE_MAX
 
-# TCP缓冲区（80%安全）
+# TCP缓冲区
 net.core.rmem_max = 4194304
 net.core.wmem_max = 4194304
 net.ipv4.tcp_rmem = 4096 87380 4194304
 net.ipv4.tcp_wmem = 4096 87380 4194304
 
-# TCP内存（80%安全）
+# TCP内存
 net.ipv4.tcp_mem = $TCP_MEM_MIN $TCP_MEM_DEFAULT $TCP_MEM_MAX
 
 # 端口范围
@@ -620,38 +673,19 @@ net.ipv4.tcp_keepalive_probes = 5
 net.ipv4.tcp_keepalive_intvl = 15
 EOF
             
-            # 应用配置前先测试
-            echo -e "${YELLOW}正在测试配置参数...${RESET}"
-            
-            # 测试关键参数
-            TEST_CMDS=(
-                "sysctl -w net.core.somaxconn=$MAX_CONN"
-                "sysctl -w net.ipv4.tcp_max_syn_backlog=$MAX_CONN"
-                "sysctl -w fs.file-max=$FILE_MAX"
-            )
-            
-            for cmd in "${TEST_CMDS[@]}"; do
-                if eval "$cmd" >/dev/null 2>&1; then
-                    echo -e "  ${GREEN}✓ 参数测试通过${RESET}"
-                else
-                    echo -e "  ${RED}✗ 参数设置失败，使用默认值${RESET}"
-                    # 使用更保守的值
-                    MAX_CONN=128
-                    FILE_MAX=65536
-                fi
-            done
-            
             # 应用配置
             echo -e "${YELLOW}正在应用配置...${RESET}"
-            cp /tmp/optimization_80.conf "$sysctl_file"
+            cp /tmp/enhanced_optimization.conf "$sysctl_file"
             
-            # 应用配置但不重启，先测试
+            # 应用配置
             sysctl -p "$sysctl_file" >/dev/null 2>&1
             
-            # 创建自动恢复标记
-            echo "optimization_applied=$(date)" > /tmp/.network_optimized
+            # 设置文件描述符限制
+            LIMITS_FILE="/etc/security/limits.conf"
+            echo "* soft nofile $FILE_MAX" | sudo tee -a "$LIMITS_FILE" >/dev/null
+            echo "* hard nofile $FILE_MAX" | sudo tee -a "$LIMITS_FILE" >/dev/null
             
-            echo -e "${GREEN}✅ 优化配置已应用！${RESET}"
+            echo -e "${GREEN}✅ 增强网络优化配置已应用！${RESET}"
             echo -e "${YELLOW}正在立即重启系统...${RESET}"
             echo ""
             echo -e "${RED}如果重启后无法连接，请使用VNC或控制台执行:${RESET}"
@@ -673,10 +707,11 @@ EOF
             echo "2) 安装 BBR v3"
             echo "3) 卸载当前 BBR 版本"
             echo "4) 检查 BBR 状态"
-            echo "5) 应用增强网络优化"
-            echo "6) 恢复默认 TCP 设置"
-            echo "7) 返回主菜单"
-            read -p "请输入选项 [1-7]: " bbr_choice
+            echo "5) 应用一键网络优化"
+            echo "6) 应用增强网络优化"
+            echo "7) 恢复默认 TCP 设置"
+            echo "8) 返回主菜单"
+            read -p "请输入选项 [1-8]: " bbr_choice
             
             case $bbr_choice in
                 1) install_original_bbr ;;
@@ -687,9 +722,10 @@ EOF
                     ;;
                 3) uninstall_bbr ;;
                 4) check_bbr_status ;;
-                5) apply_enhanced_network_optimizations ;;
-                6) restore_default_tcp_settings ;;
-                7) 
+                5) apply_network_optimizations ;;
+                6) apply_enhanced_network_optimizations ;;
+                7) restore_default_tcp_settings ;;
+                8) 
                     echo -e "${YELLOW}返回主菜单...${RESET}"
                     break
                     ;;
