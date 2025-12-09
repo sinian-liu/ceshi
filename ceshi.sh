@@ -216,10 +216,10 @@ show_menu() {
                 # Ubuntu版本特殊处理
                 if [ "$OS" = "ubuntu" ]; then
                     case $VER in
-                        "noble"|"24.04") VER="24.04" ;;
-                        "jammy"|"22.04") VER="22.04" ;;
-                        "focal"|"20.04") VER="20.04" ;;
-                        "bionic"|"18.04") VER="18.04" ;;
+                        "24.04"|"noble") VER="24.04" ;;
+                        "22.04"|"jammy") VER="22.04" ;;
+                        "20.04"|"focal") VER="20.04" ;;
+                        "18.04"|"bionic") VER="18.04" ;;
                     esac
                 fi
             elif [ -f /etc/centos-release ]; then
@@ -240,7 +240,7 @@ show_menu() {
             CPU_CORES=$(nproc)
             MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
             MEM_MB=$((MEM_KB/1024))
-            
+            MEM_GB=$(echo "scale=1; $MEM_MB/1024" | bc)
             
             # 显示结果
             echo -e "${GREEN}================================${RESET}"
@@ -248,7 +248,7 @@ show_menu() {
             echo -e "操作系统: $OS_NAME $VER"
             echo -e "CPU核心: $CPU_CORES"
             
-            if [ $MEM_MB -ge 1024 ]; then
+            if [ $MEM_GB -ge 1 ]; then
                 echo -e "内存: ${MEM_GB}GB (${MEM_MB}MB)"
             else
                 echo -e "内存: ${MEM_MB}MB"
@@ -258,7 +258,7 @@ show_menu() {
             export CPU_CORES MEM_MB MEM_GB OS VER
         }
         
-        # 使用场景选择
+        # 修复：使用场景选择函数（避免递归调用）
         select_vps_usage() {
             echo -e "${CYAN}请选择VPS主要用途：${RESET}"
             echo "1) 视频流媒体服务器 (多人同时观看)"
@@ -287,9 +287,8 @@ show_menu() {
                     echo -e "${GREEN}已选择：平衡模式优化${RESET}"
                     ;;
                 5)
-                    usage_info=$(custom_optimization)
-                    echo "$usage_info"
-                    return
+                    usage="custom"
+                    echo -e "${YELLOW}自定义配置将后续进行${RESET}"
                     ;;
                 *)
                     usage="balance"
@@ -300,8 +299,8 @@ show_menu() {
             echo "$usage"
         }
         
-        # 自定义优化配置
-        custom_optimization() {
+        # 修复：自定义优化配置（独立函数）
+        get_custom_config() {
             echo -e "${YELLOW}自定义优化配置${RESET}"
             
             read -p "最大连接数 (建议 1024-65535): " custom_conn
@@ -333,9 +332,9 @@ show_menu() {
             
             read -p "是否应用此配置？(y/n): " confirm
             if [[ $confirm == "y" || $confirm == "Y" ]]; then
-                echo "custom|$custom_conn|$custom_buffer|$custom_busy_poll"
+                echo "$custom_conn $custom_buffer $custom_busy_poll"
             else
-                echo "balance"
+                echo ""
             fi
         }
         
@@ -346,11 +345,8 @@ show_menu() {
             local vps_usage=$3  # "video" "download" "mixed" "balance" "custom"
             
             if [ "$vps_usage" = "custom" ]; then
-                # 自定义参数已通过参数传入
-                local custom_conn=$4
-                local custom_buffer=$5
-                local custom_busy_poll=$6
-                echo "$custom_conn $custom_buffer $custom_busy_poll"
+                # 自定义参数需要单独处理
+                echo "custom"
                 return
             fi
             
@@ -421,10 +417,10 @@ show_menu() {
                 final_buffer=1048576  # 1MB
             fi
             
-            # 视频优化计算（安全版）- 采纳专业建议
+            # 视频优化计算（安全版）
             local busy_poll_val=0
             
-            # ≥1GB 才真正适合开启（采纳专业建议）
+            # ≥1GB 才真正适合开启
             if [ $mem_mb -ge 1024 ]; then
                 # 1GB+：标准计算
                 busy_poll_val=$((25 + cpu_cores * 5))
@@ -434,7 +430,6 @@ show_menu() {
             # 768MB-1GB 且 2核+ 可以考虑轻度开启
             elif [ $mem_mb -ge 768 ] && [ $cpu_cores -ge 2 ]; then
                 busy_poll_val=15
-            # 其他情况都不开（避免自杀式优化）
             fi
             
             # 对于下载场景，减少busy_poll
@@ -450,12 +445,18 @@ show_menu() {
             echo "$final_conn $final_buffer $busy_poll_val"
         }
         
-        # 生成增强版配置
+        # 修复：生成增强版配置（避免变量未定义）
         generate_enhanced_config() {
             local somaxconn=$1
             local rmem_max=$2
             local busy_poll=$3
             local usage=$4
+            
+            # 确保变量已定义
+            [ -z "$OS" ] && OS="unknown"
+            [ -z "$VER" ] && VER="unknown"
+            [ -z "$MEM_MB" ] && MEM_MB=0
+            [ -z "$CPU_CORES" ] && CPU_CORES=1
             
             sysctl_file="/etc/sysctl.conf"
             if [ "$OS" = "centos" ] || [ "$OS" = "rhel" ] || \
@@ -482,13 +483,12 @@ show_menu() {
                 netdev_budget=2000
             fi
             
-            # 动态计算 qdisc_limit（采纳微调建议）
+            # 动态计算 qdisc_limit
+            local qdisc_limit=1024
             if [ $MEM_MB -lt 512 ]; then
                 qdisc_limit=256
             elif [ $MEM_MB -lt 1024 ]; then
                 qdisc_limit=512
-            else
-                qdisc_limit=1024
             fi
             
             # 下载/混合用途增加队列长度
@@ -509,17 +509,17 @@ show_menu() {
 net.core.default_qdisc = fq_codel
 net.ipv4.tcp_congestion_control = bbr
 
-# 2. 高级队列优化（采纳微调建议）
+# 2. 高级队列优化
 net.core.netdev_max_backlog = $((somaxconn / 4))
 net.core.netdev_budget = $netdev_budget
 net.core.netdev_budget_usecs = 4000
 net.sched.default.qdisc_limit = $qdisc_limit
 
-# 3. BBR增强优化（采纳微调建议）
+# 3. BBR增强优化
 net.ipv4.tcp_ecn = 1
-net.ipv4.tcp_pacing_ss_ratio = 150      # 从200改为150，晚高峰更稳定
+net.ipv4.tcp_pacing_ss_ratio = 150
 net.ipv4.tcp_pacing_ca_ratio = 120
-net.ipv4.tcp_limit_output_bytes = 1048576  # 1MB限制，多线程下载提升3-5%
+net.ipv4.tcp_limit_output_bytes = 1048576
 
 # 4. 连接管理优化
 net.core.somaxconn = $somaxconn
@@ -561,10 +561,10 @@ net.ipv4.tcp_fastopen = 3
 net.ipv4.tcp_no_metrics_save = 1
 EOF
             
-            # 11. 低配机器安全设置（采纳微调建议）
+            # 11. 低配机器安全设置
             if [ $MEM_MB -lt 1024 ]; then
                 cat >> "$sysctl_file" << EOF
-net.ipv4.tcp_slow_start_after_idle = 1  # 低内存保护，防止下载突发爆内存
+net.ipv4.tcp_slow_start_after_idle = 1
 EOF
             else
                 cat >> "$sysctl_file" << EOF
@@ -601,49 +601,19 @@ net.core.busy_read = $busy_poll
 net.ipv4.tcp_low_latency = 1
 EOF
                 
-                # notsent_lowat 内存分级（采纳微调建议）
+                # notsent_lowat 内存分级
                 if [ $MEM_MB -ge 2048 ]; then
                     cat >> "$sysctl_file" << EOF
-net.ipv4.tcp_notsent_lowat = 65536     # 2GB+内存用64KB，4K直播更稳
+net.ipv4.tcp_notsent_lowat = 65536
 EOF
                 else
                     cat >> "$sysctl_file" << EOF
-net.ipv4.tcp_notsent_lowat = 16384     # 标准16KB
-EOF
-                fi
-            else
-                cat >> "$sysctl_file" << EOF
-
-# 14. 视频流优化：已安全禁用
-# 原因: 当前配置 (${MEM_MB}MB, ${CPU_CORES}核) 不适合开启 busy_poll
-# 开启会导致 CPU 负载过高，影响系统稳定性
-EOF
-            fi
-            
-            # 15. 高性能VPS特殊优化（超大内存多核）
-            if [ $MEM_MB -ge 8192 ] && [ $CPU_CORES -ge 8 ]; then
-                cat >> "$sysctl_file" << EOF
-
-# 15. 高性能VPS特有优化 (≥8GB内存, ≥8核CPU)
-net.core.rmem_max = $((rmem_max * 3 / 2))          # 增加50%缓冲区
-net.core.wmem_max = $((wmem_max * 3 / 2))
-net.ipv4.tcp_mem = $((rmem_max / 4096 * 3)) $((rmem_max / 4096 * 5)) $((rmem_max / 4096 * 7))
-net.ipv4.tcp_notsent_lowat = 131072               # 128KB，支持更高码率
-net.core.busy_poll = $((busy_poll * 3 / 2))       # 增加视频优化强度
-net.core.busy_read = $((busy_poll * 3 / 2))
-EOF
-                
-                # 针对下载用途的额外优化
-                if [ "$usage" = "download" ]; then
-                    cat >> "$sysctl_file" << EOF
-net.ipv4.tcp_limit_output_bytes = 2097152         # 2MB限制，更大下载窗口
-net.sched.default.qdisc_limit = 4096              # 更大队列，支持高突发
+net.ipv4.tcp_notsent_lowat = 16384
 EOF
                 fi
             fi
             
             echo -e "${GREEN}配置文件已生成: $sysctl_file${RESET}"
-            echo -e "${CYAN}队列长度: ${qdisc_limit} packets (根据${MEM_MB}MB内存和${usage}用途动态设置)${RESET}"
         }
         
         # 应用配置和限制
@@ -657,12 +627,24 @@ EOF
                 sysctl_file="/etc/sysctl.d/99-enhanced-optimized.conf"
             fi
             
-            sudo sysctl -p "$sysctl_file"
+            # 修复：先检查文件是否存在
+            if [ ! -f "$sysctl_file" ]; then
+                echo -e "${RED}❌ 配置文件不存在: $sysctl_file${RESET}"
+                return 1
+            fi
+            
+            sudo sysctl -p "$sysctl_file" 2>/dev/null
             if [ $? -eq 0 ]; then
                 echo -e "${GREEN}✅ 网络优化配置已应用！${RESET}"
             else
-                echo -e "${RED}❌ 应用配置失败${RESET}"
-                return 1
+                # 尝试逐行应用
+                echo -e "${YELLOW}⚠️  正在尝试逐行应用配置...${RESET}"
+                while IFS= read -r line; do
+                    # 跳过注释和空行
+                    [[ "$line" =~ ^# ]] || [[ -z "$line" ]] && continue
+                    sudo sysctl -w "$line" 2>/dev/null || true
+                done < "$sysctl_file"
+                echo -e "${GREEN}✅ 配置已应用（部分可能失败）${RESET}"
             fi
             
             # 设置文件描述符限制
@@ -689,427 +671,94 @@ root hard nofile $nofile_limit
 # 进程数限制
 * soft nproc 65536
 * hard nproc 65536
-* soft memlock unlimited
-* hard memlock unlimited
 EOF
             
             echo -e "${GREEN}✅ 文件描述符限制已设置: $nofile_limit${RESET}"
-            
-            # 临时生效
-            ulimit -n $nofile_limit
         }
         
-        # ================== 修复：智能化的监控系统 ==================
-        
-        # 安装轻量级实时动态调整系统（针对不同配置优化）
-        install_realtime_dynamic_adjustment() {
-            local mem_mb=$1
+        # 修复：安装BBR（解决配置问题）
+        install_bbr_v3() {
+            echo -e "${YELLOW}正在安装/配置BBR...${RESET}"
             
-            echo -e "${YELLOW}安装实时动态调整系统...${RESET}"
+            detect_system_enhanced
             
-            # 根据内存大小选择不同策略
-            if [ $mem_mb -lt 512 ]; then
-                echo -e "${RED}❌ 内存不足512MB，建议禁用实时调整系统${RESET}"
-                echo -e "${YELLOW}监控脚本本身会消耗10-15MB内存，得不偿失${RESET}"
-                read -p "是否仍然安装极简版本？(y/N): " confirm
-                if [[ $confirm != "y" && $confirm != "Y" ]]; then
-                    return 0
-                fi
-                # 极简版本
-                MONITOR_INTERVAL=300  # 5分钟一次
-                LIGHT_MODE=true
-                echo -e "${YELLOW}启用极简监控（每5分钟）${RESET}"
-            elif [ $mem_mb -lt 1024 ]; then
-                MONITOR_INTERVAL=120  # 2分钟一次
-                LIGHT_MODE=true
-                echo -e "${YELLOW}启用轻量级监控（每2分钟）${RESET}"
-            else
-                MONITOR_INTERVAL=30   # 30秒一次
-                LIGHT_MODE=false
-                echo -e "${GREEN}启用标准监控（每30秒）${RESET}"
-            fi
-            
-            # 创建智能监控脚本
-            cat > /usr/local/bin/light_network_monitor.sh << EOF
-#!/bin/bash
-# 智能轻量级网络监控器
-MONITOR_INTERVAL=$MONITOR_INTERVAL
-LOG_FILE="/var/log/network_monitor.log"
-MAX_LOG_SIZE=1048576  # 1MB最大日志大小
-SELF_MEMORY_LIMIT=10  # 脚本自身最大内存使用(MB)
-
-# 安全自检：脚本自动清理
-self_cleanup() {
-    # 检查脚本内存使用
-    local pid=$$
-    local self_mem_mb=\$(pmap -x \$pid | tail -1 | awk '{print int(\$3/1024)}')
-    
-    if [ \$self_mem_mb -gt \$SELF_MEMORY_LIMIT ]; then
-        echo "[安全] \$(date) 脚本内存使用\${self_mem_mb}MB > \${SELF_MEMORY_LIMIT}MB，自动重启" >> "\$LOG_FILE"
-        exec \$0 "\$@"  # 重新执行自己
-    fi
-    
-    # 日志轮转
-    if [ -f "\$LOG_FILE" ] && [ \$(stat -c%s "\$LOG_FILE") -gt \$MAX_LOG_SIZE ]; then
-        mv "\$LOG_FILE" "\${LOG_FILE}.old"
-        echo "[日志轮转] \$(date) 日志文件已轮转" > "\$LOG_FILE"
-    fi
-}
-
-# 内存检测和自动退出
-check_memory_and_exit() {
-    local available_mb=\$(free -m | awk '/^Mem:/ {print \$7}')
-    local total_mem=\$(grep MemTotal /proc/meminfo | awk '{print \$2/1024}')
-    
-    # 256MB机器：可用内存<50MB时退出
-    if [ \$total_mem -lt 256 ] && [ \$available_mb -lt 50 ]; then
-        echo "[安全退出] \$(date) 内存不足50MB，监控脚本暂停" >> "\$LOG_FILE"
-        sleep 600  # 暂停10分钟
-        return 1
-    fi
-    
-    # 512MB机器：可用内存<100MB时降级
-    if [ \$total_mem -lt 512 ] && [ \$available_mb -lt 100 ]; then
-        MONITOR_INTERVAL=600  # 降级为10分钟一次
-        echo "[降级] \$(date) 内存紧张，监控降级为10分钟一次" >> "\$LOG_FILE"
-    fi
-    
-    return 0
-}
-
-# 主监控逻辑（极简高效）
-main_monitor() {
-    # 1. 安全自检
-    self_cleanup
-    
-    # 2. 内存检测（可能暂停或降级）
-    if ! check_memory_and_exit; then
-        return
-    fi
-    
-    # 3. 只检查最关键指标（减少CPU使用）
-    local mem_usage=\$(free | awk '/^Mem:/ {printf "%.1f", \$3/\$2 * 100}')
-    local cpu_load=\$(uptime | awk -F'load average:' '{print \$2}' | awk '{print \$1}' | tr -d ',')
-    
-    # 4. 只在必要时采取行动
-    local need_action=false
-    
-    # 情况1: 内存使用过高 (>85%)
-    if [ \$(echo "\$mem_usage > 85" | bc) -eq 1 ]; then
-        echo "[调整] \$(date) 高内存使用(\${mem_usage}%)，缩减缓冲区" >> "\$LOG_FILE"
-        
-        # 根据内存大小调整幅度
-        local total_mem=\$(grep MemTotal /proc/meminfo | awk '{print \$2/1024}')
-        if [ \$total_mem -lt 512 ]; then
-            sysctl -w net.core.rmem_max=524288  # 512KB
-            sysctl -w net.core.wmem_max=524288
-        elif [ \$total_mem -lt 1024 ]; then
-            sysctl -w net.core.rmem_max=1048576  # 1MB
-            sysctl -w net.core.wmem_max=1048576
-        else
-            sysctl -w net.core.rmem_max=2097152  # 2MB
-            sysctl -w net.core.wmem_max=2097152
-        fi
-        need_action=true
-    fi
-    
-    # 情况2: CPU负载过高 (>2.0) 且内存充足
-    if [ \$(echo "\$cpu_load > 2.0" | bc) -eq 1 ] && [ \$(echo "\$mem_usage < 70" | bc) -eq 1 ]; then
-        local current_busy_poll=\$(sysctl -n net.core.busy_poll 2>/dev/null || echo "0")
-        if [ \$current_busy_poll -gt 10 ]; then
-            local new_busy_poll=\$((current_busy_poll / 2))
-            echo "[调整] \$(date) CPU负载高(\${cpu_load})，降低视频优化 \${current_busy_poll}→\${new_busy_poll}" >> "\$LOG_FILE"
-            sysctl -w net.core.busy_poll="\$new_busy_poll" 2>/dev/null
-            sysctl -w net.core.busy_read="\$new_busy_poll" 2>/dev/null
-            need_action=true
-        fi
-    fi
-    
-    # 5. 减少日志写入频率（只在有行动时记录详情）
-    if ! \$need_action && [ \$MONITOR_INTERVAL -lt 300 ]; then
-        # 长时间无行动时，减少日志记录
-        local log_count=\$(grep -c "\[监控\]" "\$LOG_FILE" 2>/dev/null || echo 0)
-        if [ \$log_count -gt 100 ]; then
-            sed -i '/\[监控\]/d' "\$LOG_FILE" 2>/dev/null
-        fi
-    fi
-}
-
-# 主循环
-while true; do
-    main_monitor
-    sleep \$MONITOR_INTERVAL
-done
-EOF
-            
-            chmod +x /usr/local/bin/light_network_monitor.sh
-            
-            # 创建智能systemd服务（带资源限制）
-            cat > /etc/systemd/system/network-monitor.service << EOF
-[Unit]
-Description=Lightweight Network Monitor
-After=network.target
-Wants=network.target
-
-[Service]
-Type=simple
-Restart=always
-RestartSec=30
-User=root
-ExecStart=/usr/local/bin/light_network_monitor.sh
-# 资源限制（防止脚本失控）
-MemoryMax=20M
-CPUQuota=5%
-IOWeight=100
-
-# 日志限制
-StandardOutput=null
-StandardError=null
-SyslogIdentifier=network-monitor
-
-[Install]
-WantedBy=multi-user.target
-EOF
-            
-            # 配置日志轮转（非常重要！）
-            cat > /etc/logrotate.d/network-monitor << EOF
-/var/log/network_monitor.log {
-    daily
-    rotate 7
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 644 root root
-    maxsize 1M
-    postrotate
-        systemctl reload network-monitor.service > /dev/null 2>&1 || true
-    endscript
-}
-EOF
-            
-            # 备份当前优化配置
-            if [ -f "/etc/sysctl.d/99-enhanced-optimized.conf" ]; then
-                cp "/etc/sysctl.d/99-enhanced-optimized.conf" "/etc/sysctl.d/99-enhanced-optimized.conf.backup"
-            fi
-            
-            systemctl daemon-reload
-            systemctl enable network-monitor.service
-            systemctl start network-monitor.service
-            
-            echo -e "${GREEN}✅ 轻量级实时监控系统已安装${RESET}"
-            echo -e "${CYAN}监控间隔: ${MONITOR_INTERVAL}秒${RESET}"
-            echo -e "${CYAN}内存限制: 20MB${RESET}"
-            echo -e "${CYAN}CPU限制: 5%${RESET}"
-            echo -e "${CYAN}日志轮转: 每日，保留7天，最大1MB${RESET}"
-            echo -e "${CYAN}状态查看: systemctl status network-monitor${RESET}"
-        }
-        
-        # 安装智能学习系统（内存敏感版本）
-        install_pattern_learner() {
-            local mem_mb=$1
-            
-            echo -e "${YELLOW}安装智能模式学习系统...${RESET}"
-            
-            # 根据内存决定是否安装
-            if [ $mem_mb -lt 1024 ]; then
-                echo -e "${YELLOW}⚠️  内存${mem_mb}MB < 1GB，建议禁用智能学习系统${RESET}"
-                echo -e "${CYAN}学习系统需要额外内存存储历史数据，可能影响性能${RESET}"
-                read -p "是否仍然安装简化版本？(y/N): " confirm
-                if [[ $confirm != "y" && $confirm != "Y" ]]; then
-                    return 0
-                fi
-            fi
-            
-            # 创建精简学习脚本
-            cat > /usr/local/bin/smart_network_learner.sh << EOF
-#!/bin/bash
-# 精简智能网络学习器
-LEARN_INTERVAL=600  # 10分钟一次（比5分钟更安全）
-HISTORY_FILE="/var/log/network_history.log"
-MAX_HISTORY_SIZE=524288  # 最大512KB历史数据
-MAX_HISTORY_DAYS=3       # 只保留3天数据
-
-# 内存保护：定期清理历史数据
-cleanup_history() {
-    if [ -f "\$HISTORY_FILE" ]; then
-        local file_size=\$(stat -c%s "\$HISTORY_FILE")
-        if [ \$file_size -gt \$MAX_HISTORY_SIZE ]; then
-            # 保留最新数据
-            tail -c \$MAX_HISTORY_SIZE "\$HISTORY_FILE" > "\${HISTORY_FILE}.tmp"
-            mv "\${HISTORY_FILE}.tmp" "\$HISTORY_FILE"
-            echo "[清理] \$(date) 历史文件过大(\${file_size}字节)，已清理" >> "/var/log/network_learner.log"
-        fi
-        
-        # 删除超过3天的数据
-        if [ \$(find "\$HISTORY_FILE" -mtime +\$MAX_HISTORY_DAYS 2>/dev/null) ]; then
-            > "\$HISTORY_FILE"
-            echo "[清理] \$(date) 清理超过\${MAX_HISTORY_DAYS}天的历史数据" >> "/var/log/network_learner.log"
-        fi
-    fi
-}
-
-learn_current_pattern() {
-    # 内存检查
-    local available_mb=\$(free -m | awk '/^Mem:/ {print \$7}')
-    local total_mem=\$(grep MemTotal /proc/meminfo | awk '{print \$2/1024}')
-    
-    # 内存不足时跳过学习
-    if [ \$total_mem -lt 1024 ] && [ \$available_mb -lt 200 ]; then
-        echo "[跳过] \$(date) 内存紧张，跳过本轮学习" >> "/var/log/network_learner.log"
-        return
-    fi
-    
-    local hour=\$(date +%H)
-    local mem_usage=\$(free | awk '/^Mem:/ {printf "%.1f", \$3/\$2 * 100}')
-    local cpu_load=\$(uptime | awk -F'load average:' '{print \$2}' | awk '{print \$1}' | tr -d ',')
-    
-    # 只记录关键数据（减少存储）
-    echo "\$(date '+%Y-%m-%d %H') \${hour} \${mem_usage} \${cpu_load}" >> "\$HISTORY_FILE"
-    
-    # 定期清理
-    cleanup_history
-    
-    # 只在内存充足时进行分析
-    if [ \$available_mb -gt 300 ]; then
-        analyze_time_patterns "\$hour"
-    fi
-}
-
-analyze_time_patterns() {
-    local hour=\$1
-    
-    # 只分析最近24小时数据（减少计算）
-    local pattern_data=\$(tail -n 24 "\$HISTORY_FILE" 2>/dev/null | grep " \$(printf "%02d" \$hour)" || true)
-    
-    if [ -n "\$pattern_data" ]; then
-        local avg_mem=\$(echo "\$pattern_data" | awk '{sum+=\$3} END {if(NR>0) print sum/NR; else print 0}')
-        
-        # 预测高峰（更保守的阈值）
-        if [ \$(echo "\$avg_mem > 75" | bc) -eq 1 ]; then
-            echo "[预测] \$(date) 检测到 \${hour}:00 时段可能高峰(平均\${avg_mem}%)" >> "/var/log/network_learner.log"
-            
-            # 轻度调整（不减太多，避免过度）
-            current_rmem=\$(sysctl -n net.core.rmem_max 2>/dev/null || echo "16777216")
-            if [ \$current_rmem -gt 4194304 ]; then  # 大于4MB时才调整
-                new_rmem=\$((current_rmem * 90 / 100))  # 只减少10%
-                sysctl -w net.core.rmem_max="\$new_rmem" 2>/dev/null
-                sysctl -w net.core.wmem_max="\$new_rmem" 2>/dev/null
-            fi
-        fi
-    fi
-}
-
-# 主循环（带内存检查）
-while true; do
-    # 检查系统内存
-    local available_mb=\$(free -m | awk '/^Mem:/ {print \$7}')
-    local total_mem=\$(grep MemTotal /proc/meminfo | awk '{print \$2/1024}')
-    
-    # 小内存机器：内存不足时延长间隔
-    if [ \$total_mem -lt 1024 ] && [ \$available_mb -lt 150 ]; then
-        sleep 1800  # 内存不足，休眠30分钟
-    else
-        learn_current_pattern
-        sleep \$LEARN_INTERVAL
-    fi
-done
-EOF
-            
-            chmod +x /usr/local/bin/smart_network_learner.sh
-            
-            # 配置学习服务的资源限制
-            cat > /etc/systemd/system/network-learner.service << EOF
-[Unit]
-Description=Smart Network Pattern Learner
-After=network.target
-Requires=network-monitor.service
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/smart_network_learner.sh
-Restart=always
-RestartSec=60
-User=root
-# 严格的资源限制
-MemoryMax=15M
-CPUQuota=2%
-CPUWeight=50
-MemorySwapMax=0
-
-[Install]
-WantedBy=multi-user.target
-EOF
-            
-            # 配置日志轮转
-            cat > /etc/logrotate.d/network-learner << EOF
-/var/log/network_learner.log {
-    weekly
-    rotate 4
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 644 root root
-    maxsize 500K
-}
-/var/log/network_history.log {
-    weekly
-    rotate 2
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 644 root root
-    maxsize 1M
-}
-EOF
-            
-            systemctl daemon-reload
-            systemctl enable network-learner.service
-            
-            # 内存<512MB时默认不启动
-            if [ $mem_mb -ge 512 ]; then
-                systemctl start network-learner.service
-                echo -e "${GREEN}✅ 智能学习系统已安装并启动${RESET}"
-            else
-                echo -e "${YELLOW}⚠️  智能学习系统已安装但未启动（内存不足512MB）${RESET}"
-                echo -e "${CYAN}如需启用：systemctl start network-learner${RESET}"
-            fi
-            
-            echo -e "${CYAN}学习间隔: 10分钟${RESET}"
-            echo -e "${CYAN}历史数据: 最大512KB，保留3天${RESET}"
-            echo -e "${CYAN}资源限制: 内存15MB, CPU 2%${RESET}"
-        }
-        
-        # 检查内核版本（包含BBRv3检测）
-        check_kernel_version() {
+            # 检查内核支持
             kernel_version=$(uname -r)
-            echo -e "${CYAN}当前内核版本: $kernel_version${RESET}"
-            
             major=$(echo $kernel_version | cut -d. -f1)
             minor=$(echo $kernel_version | cut -d. -f2)
             
             if [ $major -lt 4 ] || ([ $major -eq 4 ] && [ $minor -lt 9 ]); then
                 echo -e "${RED}⚠️  内核版本过低 (<4.9)，BBR可能不可用${RESET}"
                 return 1
-            elif [ $major -lt 5 ] || ([ $major -eq 5 ] && [ $minor -lt 6 ]); then
-                echo -e "${YELLOW}内核版本支持基础BBR${RESET}"
-                return 0
+            fi
+            
+            # 加载模块
+            sudo modprobe tcp_bbr
+            if [ $? -ne 0 ]; then
+                echo -e "${RED}加载BBR模块失败${RESET}"
+                return 1
+            fi
+            
+            # 配置sysctl - 修复qdisc问题
+            sysctl_file="/etc/sysctl.conf"
+            if [ "$OS" = "centos" ] || [ "$OS" = "rhel" ] || \
+               [ "$OS" = "almalinux" ] || [ "$OS" = "rocky" ]; then
+                sysctl_file="/etc/sysctl.d/99-bbr.conf"
+            fi
+            
+            # 先检查可用的qdisc
+            echo -e "${YELLOW}检查可用队列规则...${RESET}"
+            available_qdiscs=$(ls /lib/modules/$(uname -r)/kernel/net/sched/ | grep -o 'sch_[a-z]*' | sed 's/sch_//' | tr '\n' ' ')
+            echo -e "可用队列规则: $available_qdiscs"
+            
+            # 选择最佳qdisc
+            qdisc_to_use="fq_codel"
+            if echo "$available_qdiscs" | grep -q "fq_codel"; then
+                qdisc_to_use="fq_codel"
+            elif echo "$available_qdiscs" | grep -q "fq"; then
+                qdisc_to_use="fq"
+            elif echo "$available_qdiscs" | grep -q "cake"; then
+                qdisc_to_use="cake"
             else
-                echo -e "${GREEN}✅ 内核版本支持BBR及改进版${RESET}"
+                qdisc_to_use="pfifo_fast"
             fi
             
-            # BBRv3 检测提示（采纳微调建议）
-            if [ $major -gt 5 ] || ([ $major -eq 5 ] && [ $minor -ge 15 ]); then
-                echo -e "${GREEN}✅ 当前内核已支持 BBRv3（tcp_bbr@5.15+）${RESET}"
-                echo -e "${CYAN}   如需启用，可手动执行：${RESET}"
-                echo -e "   sudo modprobe tcp_bbr3 2>/dev/null && echo tcp_bbr3 | sudo tee /etc/modules-load.d/bbr3.conf"
-                echo -e "   sudo sysctl -w net.ipv4.tcp_congestion_control=bbr3"
-                echo -e "${YELLOW}   注意：BBRv3仍在开发中，生产环境建议测试后再使用${RESET}"
+            echo -e "${GREEN}使用队列规则: $qdisc_to_use${RESET}"
+            
+            # 写入配置
+            cat > "$sysctl_file" << EOF
+# BBR 优化配置
+net.core.default_qdisc = $qdisc_to_use
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_fastopen = 3
+EOF
+            
+            # 应用配置
+            if sudo sysctl -p "$sysctl_file" 2>/dev/null; then
+                echo -e "${GREEN}✅ BBR优化配置已应用${RESET}"
+            else
+                # 逐行应用
+                echo -e "${YELLOW}⚠️  逐行应用配置...${RESET}"
+                sudo sysctl -w net.core.default_qdisc="$qdisc_to_use" 2>/dev/null || true
+                sudo sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null
+                sudo sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null
+                echo -e "${GREEN}✅ BBR配置已设置${RESET}"
             fi
             
-            return 0
+            # 配置自动加载
+            echo "tcp_bbr" | sudo tee /etc/modules-load.d/bbr.conf >/dev/null
+            
+            echo -e "${CYAN}当前BBR状态:${RESET}"
+            current_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "unknown")
+            current_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "unknown")
+            echo -e "拥塞控制: $current_cc"
+            echo -e "队列规则: $current_qdisc"
+            
+            if [ "$current_cc" = "bbr" ]; then
+                echo -e "${GREEN}✅ BBR已成功启用${RESET}"
+            else
+                echo -e "${YELLOW}⚠️  BBR可能未完全启用，请检查内核支持${RESET}"
+            fi
         }
         
         # 检查BBR状态
@@ -1117,14 +766,10 @@ EOF
             echo -e "${YELLOW}正在检查BBR状态...${RESET}"
             
             # 检查模块
-            if modinfo tcp_bbr >/dev/null 2>&1; then
-                if lsmod | grep -q tcp_bbr; then
-                    echo -e "${GREEN}✅ BBR模块已加载${RESET}"
-                else
-                    echo -e "${YELLOW}⚠️  BBR模块未加载${RESET}"
-                fi
+            if lsmod | grep -q tcp_bbr; then
+                echo -e "${GREEN}✅ BBR模块已加载${RESET}"
             else
-                echo -e "${RED}❌ BBR模块不存在${RESET}"
+                echo -e "${YELLOW}⚠️  BBR模块未加载${RESET}"
             fi
             
             # 检查当前算法
@@ -1141,60 +786,16 @@ EOF
             
             # 显示连接统计
             echo -e "\n${CYAN}当前连接状态:${RESET}"
-            ss -s | head -5
-        }
-        
-        # 安装BBR v3（改进版）
-        install_bbr_v3() {
-            echo -e "${YELLOW}正在安装/配置BBR...${RESET}"
-            
-            detect_system_enhanced
-            
-            # 检查内核支持
-            check_kernel_version
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}内核不支持BBR，安装中止${RESET}"
-                return 1
-            fi
-            
-            # 加载模块
-            sudo modprobe tcp_bbr
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}加载BBR模块失败${RESET}"
-                return 1
-            fi
-            
-            # 配置sysctl - 采纳改进建议
-            sysctl_file="/etc/sysctl.conf"
-            if [ "$OS" = "centos" ] || [ "$OS" = "rhel" ] || \
-               [ "$OS" = "almalinux" ] || [ "$OS" = "rocky" ]; then
-                sysctl_file="/etc/sysctl.d/99-bbr.conf"
-            fi
-            
-            # 写入配置（包含所有建议改进）
-            cat > "$sysctl_file" << EOF
-# BBR 优化配置（包含2025验证改进）
-net.core.default_qdisc = fq_codel      # 改fq为fq_codel
-net.ipv4.tcp_congestion_control = bbr
-net.ipv4.tcp_fastopen = 3              # 添加TFO
-EOF
-            
-            sudo sysctl -p "$sysctl_file"
-            echo -e "${GREEN}✅ BBR优化配置已应用${RESET}"
-            
-            # 配置自动加载
-            echo "tcp_bbr" | sudo tee /etc/modules-load.d/bbr.conf >/dev/null
-            
-            check_bbr_status
+            ss -s 2>/dev/null | head -5 || echo "ss命令不可用"
         }
         
         # 卸载BBR
         uninstall_bbr() {
             echo -e "${YELLOW}正在卸载BBR...${RESET}"
             
-            sudo sysctl -w net.ipv4.tcp_congestion_control=cubic
-            sudo sysctl -w net.core.default_qdisc=fq_codel
-            sudo sysctl -w net.ipv4.tcp_fastopen=1
+            sudo sysctl -w net.ipv4.tcp_congestion_control=cubic 2>/dev/null
+            sudo sysctl -w net.core.default_qdisc=fq_codel 2>/dev/null
+            sudo sysctl -w net.ipv4.tcp_fastopen=1 2>/dev/null
             sudo modprobe -r tcp_bbr 2>/dev/null
             
             if [ -f /etc/modules-load.d/bbr.conf ]; then
@@ -1204,7 +805,7 @@ EOF
             echo -e "${GREEN}✅ BBR已卸载${RESET}"
         }
         
-        # 增强版网络优化（主函数）
+        # 修复：增强版网络优化（主函数）- 完全重写
         enhanced_network_optimization() {
             echo -e "${YELLOW}正在应用增强版网络优化...${RESET}"
             echo -e "${CYAN}================================${RESET}"
@@ -1214,25 +815,36 @@ EOF
             
             # 2. 选择使用场景
             echo -e "\n${CYAN}使用场景选择${RESET}"
-            usage_info=$(select_vps_usage)
+            usage=$(select_vps_usage)
             
-            if [[ "$usage_info" == *"|"* ]]; then
-                # 自定义配置
-                usage=$(echo "$usage_info" | cut -d'|' -f1)
-                custom_conn=$(echo "$usage_info" | cut -d'|' -f2)
-                custom_buffer=$(echo "$usage_info" | cut -d'|' -f3)
-                custom_busy_poll=$(echo "$usage_info" | cut -d'|' -f4)
-                
-                params=$(calculate_dynamic_params $MEM_MB $CPU_CORES "$usage" "$custom_conn" "$custom_buffer" "$custom_busy_poll")
+            # 3. 自定义配置处理
+            if [ "$usage" = "custom" ]; then
+                custom_params=$(get_custom_config)
+                if [ -z "$custom_params" ]; then
+                    echo -e "${YELLOW}优化已取消${RESET}"
+                    return
+                fi
+                read somaxconn rmem_max busy_poll <<< "$custom_params"
+                usage="custom"
             else
-                # 预设模式
-                usage="$usage_info"
+                # 预设模式计算参数
                 params=$(calculate_dynamic_params $MEM_MB $CPU_CORES "$usage")
+                
+                # 检查是否返回了custom标志
+                if [ "$params" = "custom" ]; then
+                    custom_params=$(get_custom_config)
+                    if [ -z "$custom_params" ]; then
+                        echo -e "${YELLOW}优化已取消${RESET}"
+                        return
+                    fi
+                    read somaxconn rmem_max busy_poll <<< "$custom_params"
+                    usage="custom"
+                else
+                    read somaxconn rmem_max busy_poll <<< "$params"
+                fi
             fi
             
-            read somaxconn rmem_max busy_poll <<< "$params"
-            
-            # 3. 显示优化方案
+            # 4. 显示优化方案
             echo -e "\n${GREEN}优化方案详情：${RESET}"
             echo -e "配置：${MEM_MB}MB 内存 / ${CPU_CORES}核 CPU"
             echo -e "用途：$usage 模式"
@@ -1245,7 +857,7 @@ EOF
                 echo -e "视频优化：已安全禁用"
             fi
             
-            # 4. 智能警告系统
+            # 5. 智能警告系统
             echo -e "\n${CYAN}智能提示：${RESET}"
             
             if [ $MEM_MB -lt 256 ]; then
@@ -1261,7 +873,7 @@ EOF
                 echo -e "${RED}═══════════════════════════════════════════════════════════════════${RESET}"
                 
                 read -p "${YELLOW}确认了解这些严重限制并继续优化？(y/n): ${RESET}" confirm_warning
-                if [[ "$confirm_warning" != [yY] ]]; then
+                if [[ $confirm_warning != "y" && $confirm_warning != "Y" ]]; then
                     echo -e "${YELLOW}优化已取消${RESET}"
                     return
                 fi
@@ -1306,7 +918,7 @@ EOF
                 echo -e "如需开启，建议升级到1GB+内存或2核+CPU"
             fi
             
-            # 5. 用户确认
+            # 6. 用户确认
             echo -e "\n${YELLOW}是否应用此优化方案？${RESET}"
             read -p "请输入 (y/n): " confirm
             if [[ $confirm != "y" && $confirm != "Y" ]]; then
@@ -1314,62 +926,9 @@ EOF
                 return
             fi
             
-            # 6. 生成和应用配置
+            # 7. 生成和应用配置
             generate_enhanced_config "$somaxconn" "$rmem_max" "$busy_poll" "$usage"
             apply_config_and_limits "$somaxconn"
-            
-            # 7. 高级功能选项（智能分级）
-            echo -e "\n${CYAN}高级功能选项（智能推荐）：${RESET}"
-            
-            # 根据内存智能推荐
-            if [ $MEM_MB -lt 512 ]; then
-                echo "⚠️  当前配置：${MEM_MB}MB 内存"
-                echo "推荐：1) 仅应用基本优化（默认）"
-                echo "     2) 基本优化 + 极简监控（5分钟间隔）"
-                echo "注意：智能学习系统不推荐用于<512MB内存"
-                max_level=2
-            elif [ $MEM_MB -lt 1024 ]; then
-                echo "当前配置：${MEM_MB}MB 内存"
-                echo "推荐：1) 仅应用基本优化"
-                echo "     2) 基本优化 + 轻量监控（2分钟间隔）"
-                echo "     3) 完整优化（包含学习系统）"
-                max_level=3
-            else
-                echo "当前配置：${MEM_MB}MB 内存"
-                echo "可选：1) 仅应用基本优化"
-                echo "     2) 基本优化 + 标准监控（30秒间隔）"
-                echo "     3) 完整智能优化系统"
-                max_level=3
-            fi
-            
-            read -p "请选择功能级别 [1-$max_level]: " feature_level
-            
-            # 验证输入
-            if [ -z "$feature_level" ] || [ $feature_level -lt 1 ] || [ $feature_level -gt $max_level ]; then
-                feature_level=1
-                echo -e "${YELLOW}使用默认级别1：仅基本优化${RESET}"
-            fi
-            
-            case $feature_level in
-                2)
-                    install_realtime_dynamic_adjustment $MEM_MB
-                    ;;
-                3)
-                    if [ $MEM_MB -ge 512 ]; then
-                        install_realtime_dynamic_adjustment $MEM_MB
-                        install_pattern_learner $MEM_MB
-                        echo -e "${GREEN}✅ 完整智能优化系统已安装${RESET}"
-                        echo -e "${CYAN}包含：基本优化 + 智能监控 + 模式学习${RESET}"
-                    else
-                        echo -e "${RED}❌ 内存不足512MB，无法启用智能学习系统${RESET}"
-                        echo -e "${YELLOW}已安装监控系统，但学习系统被跳过${RESET}"
-                        install_realtime_dynamic_adjustment $MEM_MB
-                    fi
-                    ;;
-                *)
-                    echo -e "${YELLOW}仅应用基本优化${RESET}"
-                    ;;
-            esac
             
             # 8. 完成提示
             echo -e "\n${GREEN}================================${RESET}"
@@ -1379,57 +938,8 @@ EOF
             echo -e "✓ TCP缓冲区: $((rmem_max/1024/1024))MB"
             echo -e "✓ 文件描述符: $((somaxconn * 4))"
             echo -e "✓ 视频优化: $(if [ $busy_poll -gt 0 ]; then echo "已启用 ($busy_poll/100)"; else echo "已安全禁用"; fi)"
-            echo -e "✓ 高级补丁: 全部应用（队列/BBR/下载优化）"
-            echo -e "✓ qdisc_limit: ${qdisc_limit} (动态计算)"
             
-            if [ $feature_level -ge 2 ]; then
-                echo -e "✓ 实时监控: 已启用 (根据${MEM_MB}MB内存智能调整)"
-            fi
-            if [ $feature_level -eq 3 ] && [ $MEM_MB -ge 512 ]; then
-                echo -e "✓ 智能学习: 已启用 (10分钟间隔)"
-            fi
-            
-            # 日志管理说明
-            echo -e "\n${CYAN}日志管理：${RESET}"
-            echo -e "  • 监控日志: /var/log/network_monitor.log"
-            echo -e "  • 自动轮转: 每日，保留7天，最大1MB"
-            echo -e "  • 手动清理: logrotate -f /etc/logrotate.d/network-monitor"
-            
-            if [ $feature_level -eq 3 ] && [ $MEM_MB -ge 512 ]; then
-                echo -e "  • 学习日志: /var/log/network_learner.log"
-                echo -e "  • 历史数据: /var/log/network_history.log"
-                echo -e "  • 数据保留: 3天，最大512KB"
-            fi
-            
-            # 性能预估
-            echo -e "\n${CYAN}预期性能提升：${RESET}"
-            if [ $MEM_MB -ge 1024 ]; then
-                echo -e "  • 视频起播时间: 减少30-50%"
-                echo -e "  • 下载速度: 提升8-12%（晚高峰）"
-                echo -e "  • 并发能力: 提升2-3倍"
-                echo -e "  • 稳定性: +15-20% (微调优化)"
-            elif [ $MEM_MB -ge 512 ]; then
-                echo -e "  • 视频流畅度: 显著改善"
-                echo -e "  • 稳定性: 大幅提升"
-                echo -e "  • 并发能力: 适度提升"
-                echo -e "  • 安全性: 最高优先级保障"
-            else
-                echo -e "  • 稳定性: 优先保障"
-                echo -e "  • 基础性能: 优化调整"
-                echo -e "  • 安全运行: 最高优先级"
-            fi
-            
-            # BBRv3提示（如果支持）
-            kernel_major=$(uname -r | cut -d. -f1)
-            kernel_minor=$(uname -r | cut -d. -f2)
-            if [ $kernel_major -gt 5 ] || ([ $kernel_major -eq 5 ] && [ $kernel_minor -ge 15 ]); then
-                echo -e "\n${GREEN}💡 BBRv3提示：${RESET}"
-                echo -e "您的内核支持 BBRv3，如需启用："
-                echo -e "  sudo modprobe tcp_bbr3"
-                echo -e "  sudo sysctl -w net.ipv4.tcp_congestion_control=bbr3"
-                echo -e "  （生产环境建议先测试）"
-            fi
-            
+            # 9. 重启建议
             read -p "是否重启系统使配置完全生效？(y/n): " reboot_choice
             if [[ $reboot_choice == "y" || $reboot_choice == "Y" ]]; then
                 echo -e "${YELLOW}正在重启系统...${RESET}"
@@ -1439,41 +949,61 @@ EOF
             fi
         }
         
-        # 恢复默认设置
+        # 修复：恢复默认TCP设置
         restore_default_tcp_settings() {
             echo -e "${YELLOW}正在恢复默认TCP设置...${RESET}"
             
-            # 恢复默认值
-            defaults=(
-                "net.ipv4.tcp_congestion_control=cubic"
-                "net.core.default_qdisc=fq_codel"
-                "net.core.somaxconn=128"
-                "net.ipv4.tcp_max_syn_backlog=128"
-                "net.ipv4.tcp_fin_timeout=60"
-                "net.ipv4.tcp_keepalive_time=7200"
-                "net.ipv4.ip_local_port_range=32768 60999"
-                "net.core.rmem_max=212992"
-                "net.core.wmem_max=212992"
-                "net.ipv4.tcp_rmem=4096 87380 6291456"
-                "net.ipv4.tcp_wmem=4096 16384 4194304"
-                "net.ipv4.tcp_max_tw_buckets=4096"
-                "net.ipv4.tcp_tw_reuse=0"
-                "net.ipv4.tcp_slow_start_after_idle=1"
-                "net.ipv4.tcp_mtu_probing=0"
-                "net.ipv4.tcp_fastopen=1"
-                "net.ipv4.tcp_ecn=0"
-                "fs.file-max=65536"
+            # 恢复默认值（修复sysctl命令）
+            sudo sysctl -w net.ipv4.tcp_congestion_control=cubic 2>/dev/null
+            sudo sysctl -w net.core.default_qdisc=fq_codel 2>/dev/null
+            sudo sysctl -w net.core.somaxconn=128 2>/dev/null
+            sudo sysctl -w net.ipv4.tcp_max_syn_backlog=128 2>/dev/null
+            sudo sysctl -w net.ipv4.tcp_fin_timeout=60 2>/dev/null
+            sudo sysctl -w net.ipv4.tcp_keepalive_time=7200 2>/dev/null
+            sudo sysctl -w net.ipv4.ip_local_port_range="32768 60999" 2>/dev/null
+            sudo sysctl -w net.core.rmem_max=212992 2>/dev/null
+            sudo sysctl -w net.core.wmem_max=212992 2>/dev/null
+            sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 6291456" 2>/dev/null
+            sudo sysctl -w net.ipv4.tcp_wmem="4096 16384 4194304" 2>/dev/null
+            sudo sysctl -w net.ipv4.tcp_max_tw_buckets=4096 2>/dev/null
+            sudo sysctl -w net.ipv4.tcp_tw_reuse=0 2>/dev/null
+            sudo sysctl -w net.ipv4.tcp_slow_start_after_idle=1 2>/dev/null
+            sudo sysctl -w net.ipv4.tcp_mtu_probing=0 2>/dev/null
+            sudo sysctl -w net.ipv4.tcp_fastopen=1 2>/dev/null
+            sudo sysctl -w net.ipv4.tcp_ecn=0 2>/dev/null
+            sudo sysctl -w fs.file-max=65536 2>/dev/null
+            
+            # 清理配置文件
+            sysctl_files=(
+                "/etc/sysctl.d/99-bbr.conf"
+                "/etc/sysctl.d/99-enhanced-optimized.conf"
             )
             
-            for setting in "${defaults[@]}"; do
-                sudo sysctl -w "$setting" 2>/dev/null
+            for file in "${sysctl_files[@]}"; do
+                if [ -f "$file" ]; then
+                    sudo rm -f "$file"
+                    echo -e "${GREEN}已删除: $file${RESET}"
+                fi
             done
             
-            # 停止动态调整服务
-            systemctl stop network-monitor.service 2>/dev/null
-            systemctl stop network-learner.service 2>/dev/null
+            # 清理limits文件
+            limits_files=(
+                "/etc/security/limits.d/99-enhanced-optimized.conf"
+                "/etc/security/limits.d/99-custom.conf"
+            )
             
-            echo -e "${GREEN}✅ 默认TCP设置已恢复，动态服务已停止${RESET}"
+            for file in "${limits_files[@]}"; do
+                if [ -f "$file" ]; then
+                    sudo rm -f "$file"
+                    echo -e "${GREEN}已删除: $file${RESET}"
+                fi
+            done
+            
+            # 停止服务
+            systemctl stop network-monitor.service 2>/dev/null || true
+            systemctl stop network-learner.service 2>/dev/null || true
+            
+            echo -e "${GREEN}✅ 默认TCP设置已恢复${RESET}"
         }
         
         # 安装原始BBR
@@ -1481,8 +1011,7 @@ EOF
             echo -e "${YELLOW}正在安装原始BBR...${RESET}"
             echo -e "请访问: https://github.com/teddysun/across/blob/master/bbr.sh"
             echo -e "或运行: wget -O bbr.sh https://raw.githubusercontent.com/teddysun/across/master/bbr.sh && chmod +x bbr.sh && ./bbr.sh"
-            echo -e "${YELLOW}按回车返回菜单...${RESET}"
-            read
+            read -p "${YELLOW}按回车返回菜单...${RESET}"
         }
         
         # BBR管理子菜单
@@ -1500,7 +1029,6 @@ EOF
             case $bbr_choice in
                 1)
                     install_original_bbr
-                    read -p "按回车键返回..."
                     ;;
                 2)
                     install_bbr_v3
@@ -1528,6 +1056,7 @@ EOF
                     ;;
                 *)
                     echo -e "${RED}无效选项${RESET}"
+                    read -p "按回车键继续..."
                     ;;
             esac
         done
