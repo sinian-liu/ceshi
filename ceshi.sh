@@ -240,7 +240,7 @@ show_menu() {
             CPU_CORES=$(nproc)
             MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
             MEM_MB=$((MEM_KB/1024))
-            MEM_GB=$(echo "scale=1; $MEM_MB/1024" | bc)
+            
             
             # 显示结果
             echo -e "${GREEN}================================${RESET}"
@@ -248,7 +248,7 @@ show_menu() {
             echo -e "操作系统: $OS_NAME $VER"
             echo -e "CPU核心: $CPU_CORES"
             
-            if [ $MEM_GB -ge 1 ]; then
+            if [ $MEM_MB -ge 1024 ]; then
                 echo -e "内存: ${MEM_GB}GB (${MEM_MB}MB)"
             else
                 echo -e "内存: ${MEM_MB}MB"
