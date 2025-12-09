@@ -199,7 +199,6 @@ show_menu() {
                 read -p "按回车键返回主菜单..."
                 ;;
 2)
-2)
     # BBR 和 BBR v3 安装与管理
     echo -e "${GREEN}正在进入 BBR 和 BBR v3 安装与管理菜单...${RESET}"
     bbr_management() {
