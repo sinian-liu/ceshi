@@ -201,196 +201,353 @@ show_menu() {
 2)
     # BBR 和 BBR v3 安装与管理
     echo -e "${GREEN}正在进入 BBR 和 BBR v3 安装与管理菜单...${RESET}"
-    
-    # 内存检测函数（新增）
-    detect_system_memory() {
-        if [ -f /proc/meminfo ]; then
-            TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-            TOTAL_MEM_MB=$((TOTAL_MEM_KB / 1024))
-            
-            # 内存分级
-            if [ "$TOTAL_MEM_MB" -lt 512 ]; then
-                MEM_LEVEL="tiny"
-            elif [ "$TOTAL_MEM_MB" -lt 1024 ]; then
-                MEM_LEVEL="small"
-            elif [ "$TOTAL_MEM_MB" -lt 2048 ]; then
-                MEM_LEVEL="medium"
-            elif [ "$TOTAL_MEM_MB" -lt 4096 ]; then
-                MEM_LEVEL="large"
-            elif [ "$TOTAL_MEM_MB" -lt 8192 ]; then
-                MEM_LEVEL="xlarge"
+    bbr_management() {
+        # 内存检测函数
+        detect_system_memory() {
+            if [ -f /proc/meminfo ]; then
+                TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+                TOTAL_MEM_MB=$((TOTAL_MEM_KB / 1024))
+                
+                # 内存分级
+                if [ "$TOTAL_MEM_MB" -lt 512 ]; then
+                    MEM_LEVEL="tiny"
+                elif [ "$TOTAL_MEM_MB" -lt 1024 ]; then
+                    MEM_LEVEL="small"
+                elif [ "$TOTAL_MEM_MB" -lt 2048 ]; then
+                    MEM_LEVEL="medium"
+                elif [ "$TOTAL_MEM_MB" -lt 4096 ]; then
+                    MEM_LEVEL="large"
+                elif [ "$TOTAL_MEM_MB" -lt 8192 ]; then
+                    MEM_LEVEL="xlarge"
+                else
+                    MEM_LEVEL="huge"
+                fi
+                
+                # 计算90%减配内存
+                SAFE_MEM_MB=$((TOTAL_MEM_MB * 90 / 100))
+                return "$SAFE_MEM_MB"
             else
-                MEM_LEVEL="huge"
+                TOTAL_MEM_MB=1024
+                MEM_LEVEL="medium"
+                return 921
+            fi
+        }
+        
+        # 智能参数计算（90%减配版）
+        calculate_smart_params() {
+            local mem_mb=$1
+            local scenario=$2
+            local cpu_cores=$(nproc 2>/dev/null || echo 1)
+            
+            # 基础连接数（原脚本的90%）
+            case "$MEM_LEVEL" in
+                "tiny") BASE_CONN=450 ;;      # 原500的90%
+                "small") BASE_CONN=720 ;;     # 原800的90%
+                "medium") BASE_CONN=1152 ;;   # 原1280的90%
+                "large") BASE_CONN=1843 ;;    # 原2048的90%
+                "xlarge") BASE_CONN=3686 ;;   # 原4096的90%
+                "huge") BASE_CONN=7372 ;;     # 原8192的90%
+                *) BASE_CONN=1152 ;;
+            esac
+            
+            # 根据场景调整
+            case "$scenario" in
+                "video")
+                    MAX_CONN=$((BASE_CONN * 130 / 100))  # +30%
+                    BUFFER_KB=1536                       # 1.5MB
+                    OPT_LEVEL=45                         # 提高优化
+                    ;;
+                "download")
+                    MAX_CONN=$((BASE_CONN * 115 / 100))  # +15%
+                    BUFFER_KB=768                        # 0.75MB
+                    OPT_LEVEL=27                         # 提高优化
+                    ;;
+                "mixed")
+                    MAX_CONN=$((BASE_CONN * 125 / 100))  # +25%
+                    BUFFER_KB=1152                       # 1.125MB
+                    OPT_LEVEL=35                         # 提高优化
+                    ;;
+                "balanced")
+                    MAX_CONN=$BASE_CONN
+                    BUFFER_KB=768                        # 0.75MB
+                    OPT_LEVEL=27                         # 提高优化
+                    ;;
+                *)
+                    MAX_CONN=$BASE_CONN
+                    BUFFER_KB=512
+                    OPT_LEVEL=22
+                    ;;
+            esac
+            
+            # CPU核心影响（提高影响）
+            MAX_CONN=$((MAX_CONN + (cpu_cores * 75)))
+            
+            # 安全上限
+            if [ "$MAX_CONN" -gt 65535 ]; then
+                MAX_CONN=65535
             fi
             
-            # 计算80%减配内存
-            SAFE_MEM_MB=$((TOTAL_MEM_MB * 80 / 100))
-            return "$SAFE_MEM_MB"
-        else
-            TOTAL_MEM_MB=1024
-            MEM_LEVEL="medium"
-            return 819
-        fi
-    }
-    
-    # 智能参数计算（80%减配版）
-    calculate_smart_params() {
-        local mem_mb=$1
-        local scenario=$2
-        local cpu_cores=$(nproc 2>/dev/null || echo 1)
+            # 文件描述符限制（提高）
+            FILE_MAX=$((MAX_CONN * 4))
+            [ "$FILE_MAX" -gt 131072 ] && FILE_MAX=131072  # 提高上限
+            [ "$FILE_MAX" -lt 20480 ] && FILE_MAX=20480    # 提高下限
+            
+            # 缓冲区大小（提高）
+            BUFFER_SIZE=$((BUFFER_KB * 1024))
+            
+            echo "$MAX_CONN:$BUFFER_SIZE:$FILE_MAX:$OPT_LEVEL"
+        }
         
-        # 基础连接数（原脚本的80%）
-        case "$MEM_LEVEL" in
-            "tiny") BASE_CONN=400 ;;
-            "small") BASE_CONN=640 ;;
-            "medium") BASE_CONN=1024 ;;
-            "large") BASE_CONN=1638 ;;
-            "xlarge") BASE_CONN=3276 ;;
-            "huge") BASE_CONN=6553 ;;
-            *) BASE_CONN=1024 ;;
-        esac
+        # 检查内核版本是否支持 BBR v3
+        check_kernel_version() {
+            kernel_version=$(uname -r)
+            major_version=$(echo "$kernel_version" | awk -F. '{print $1}')
+            minor_version=$(echo "$kernel_version" | awk -F. '{print $2}' | cut -d- -f1)
+            if [[ $major_version -lt 5 || ($major_version -eq 5 && $minor_version -lt 6) ]]; then
+                echo -e "${RED}当前内核版本 $kernel_version 不支持 BBR v3！${RESET}"
+                if [ -f /etc/centos-release ] && grep -q "CentOS Linux release 7" /etc/centos-release; then
+                    echo -e "${YELLOW}CentOS 7 默认内核（3.10）不支持 BBR v3，建议升级到 5.6 或更高版本（如通过 'yum install kernel'）。${RESET}"
+                else
+                    echo -e "${YELLOW}请手动升级内核到 5.6 或更高版本！${RESET}"
+                fi
+                return 1
+            fi
+            echo -e "${GREEN}内核版本 $kernel_version 支持 BBR v3。${RESET}"
+            return 0
+        }
         
-        # 根据场景调整
-        case "$scenario" in
-            "video")
-                MAX_CONN=$((BASE_CONN * 120 / 100))
-                BUFFER_KB=1024
-                OPT_LEVEL=40
-                ;;
-            "download")
-                MAX_CONN=$((BASE_CONN * 108 / 100))
-                BUFFER_KB=512
-                OPT_LEVEL=24
-                ;;
-            "mixed")
-                MAX_CONN=$((BASE_CONN * 115 / 100))
-                BUFFER_KB=768
-                OPT_LEVEL=28
-                ;;
-            "balanced")
-                MAX_CONN=$BASE_CONN
-                BUFFER_KB=512
-                OPT_LEVEL=24
-                ;;
-            *)
-                MAX_CONN=$BASE_CONN
-                BUFFER_KB=512
-                OPT_LEVEL=20
-                ;;
-        esac
+        # 检查 BBR v3 安装和运行状态
+        check_bbr_status() {
+            echo -e "${YELLOW}正在检查 BBR v3 状态...${RESET}"
+            PURPLE='\033[35m'
+            if modinfo tcp_bbr >/dev/null 2>&1; then
+                if lsmod | grep -q "tcp_bbr"; then
+                    echo -e "${GREEN}BBR v3 模块 (tcp_bbr) 已加载。${RESET}"
+                else
+                    echo -e "${PURPLE}BBR v3 模块 (tcp_bbr) 未加载，可能未启用。${RESET}"
+                    return 1
+                fi
+            else
+                echo -e "${RED}BBR v3 模块 (tcp_bbr) 未找到，可能内核不支持或模块缺失！${RESET}"
+                echo -e "${YELLOW}请确认内核版本 >= 5.6，并检查模块路径（如 /lib/modules/$(uname -r)/kernel/net/ipv4/tcp_bbr.ko）。${RESET}"
+                return 1
+            fi
+            current_congestion=$(sysctl -n net.ipv4.tcp_congestion_control)
+            if [ "$current_congestion" = "bbr" ]; then
+                echo -e "${PURPLE}拥塞控制算法已设置为 BBR，BBR v3 已成功启动。${RESET}"
+            else
+                echo -e "${RED}当前拥塞控制算法为 $current_congestion，BBR v3 未成功启动。${RESET}"
+                echo -e "${YELLOW}建议：运行 'sudo sysctl -w net.ipv4.tcp_congestion_control=bbr' 或重新安装 BBR v3。${RESET}"
+                return 1
+            fi
+            sysctl_file="/etc/sysctl.conf"
+            [ -f /etc/centos-release ] && sysctl_file="/etc/sysctl.d/99-bbr.conf"
+            if grep -q "net.ipv4.tcp_congestion_control = bbr" "$sysctl_file"; then
+                echo -e "${GREEN}BBR v3 配置已写入 $sysctl_file，重启后将保持生效。${RESET}"
+            else
+                echo -e "${YELLOW}警告：BBR v3 配置未写入 $sysctl_file，重启后可能失效。${RESET}"
+            fi
+            if [ -f /etc/modules-load.d/bbr.conf ] && grep -q "tcp_bbr" /etc/modules-load.d/bbr.conf; then
+                echo -e "${GREEN}BBR v3 模块配置为系统启动时自动加载。${RESET}"
+            else
+                echo -e "${YELLOW}警告：BBR v3 模块未配置为自动加载，重启后可能需要手动加载。${RESET}"
+                echo -e "${YELLOW}正在修复：添加 tcp_bbr 到自动加载配置...${RESET}"
+                echo "tcp_bbr" | sudo tee /etc/modules-load.d/bbr.conf >/dev/null
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}已添加 tcp_bbr 到自动加载配置。${RESET}"
+                else
+                    echo -e "${RED}添加自动加载配置失败，请手动检查 /etc/modules-load.d/bbr.conf！${RESET}"
+                fi
+            fi
+            return 0
+        }
         
-        # CPU核心影响
-        MAX_CONN=$((MAX_CONN + (cpu_cores * 50)))
+        # 检查并显示是否存在多个 BBR 版本
+        check_multiple_bbr_versions() {
+            bbr_versions=$(lsmod | grep -o 'tcp_bbr.*' | uniq)
+            if [[ $(echo "$bbr_versions" | wc -l) -gt 1 ]]; then
+                echo -e "${RED}系统存在多个 BBR 版本：${RESET}"
+                echo "$bbr_versions"
+                read -p "是否卸载其他版本并保留当前版本？(y/n): " choice
+                if [[ $choice == "y" || $choice == "Y" ]]; then
+                    uninstall_other_bbr_versions
+                fi
+            else
+                echo -e "${YELLOW}没有发现多个 BBR 版本。${RESET}"
+            fi
+        }
         
-        # 安全上限
-        if [ "$MAX_CONN" -gt 65535 ]; then
-            MAX_CONN=65535
-        fi
+        # 卸载其他 BBR 版本
+        uninstall_other_bbr_versions() {
+            current_bbr=$(lsmod | grep tcp_bbr | head -n 1)
+            current_bbr_version=$(echo "$current_bbr" | awk '{print $1}')
+            sudo modprobe -r "$current_bbr_version"
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}$current_bbr_version 卸载成功${RESET}"
+            else
+                echo -e "${RED}$current_bbr_version 卸载失败，请检查权限或模块状态！${RESET}"
+            fi
+        }
         
-        # 文件描述符
-        FILE_MAX=$((MAX_CONN * 3))
-        [ "$FILE_MAX" -gt 65535 ] && FILE_MAX=65535
-        [ "$FILE_MAX" -lt 10240 ] && FILE_MAX=10240
+        # 安装 BBR v3
+        install_bbr_v3() {
+            echo -e "${YELLOW}正在安装 BBR v3...${RESET}"
+            sudo modprobe tcp_bbr
+            if [ $? -ne 0 ]; then
+                echo -e "${RED}加载 tcp_bbr 模块失败，请检查内核支持或模块路径！${RESET}"
+                return 1
+            fi
+            sysctl_file="/etc/sysctl.conf"
+            [ -f /etc/centos-release ] && sysctl_file="/etc/sysctl.d/99-bbr.conf"
+            echo "net.ipv4.tcp_congestion_control = bbr" | sudo tee -a "$sysctl_file"
+            sudo sysctl -p "$sysctl_file"
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}BBR v3 配置已应用！${RESET}"
+            else
+                echo -e "${RED}应用 sysctl 配置失败，请手动检查 $sysctl_file！${RESET}"
+                return 1
+            fi
+            if [ ! -f /etc/modules-load.d/bbr.conf ] || ! grep -q "tcp_bbr" /etc/modules-load.d/bbr.conf; then
+                echo "tcp_bbr" | sudo tee /etc/modules-load.d/bbr.conf >/dev/null
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}已配置 tcp_bbr 模块自动加载。${RESET}"
+                else
+                    echo -e "${RED}配置模块自动加载失败，请手动检查 /etc/modules-load.d/bbr.conf！${RESET}"
+                fi
+            fi
+            check_bbr_status
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}BBR v3 安装成功！${RESET}"
+            else
+                echo -e "${RED}BBR v3 安装验证失败，请检查状态！${RESET}"
+            fi
+        }
         
-        # 缓冲区大小
-        BUFFER_SIZE=$((BUFFER_KB * 1024))
+        # 卸载 BBR
+        uninstall_bbr() {
+            echo -e "${YELLOW}正在卸载当前 BBR 版本...${RESET}"
+            sudo modprobe -r tcp_bbr
+            if [ $? -eq 0 ]; then
+                sudo sysctl -w net.ipv4.tcp_congestion_control=cubic
+                echo -e "${GREEN}BBR 版本已卸载！${RESET}"
+                if [ -f /etc/modules-load.d/bbr.conf ]; then
+                    sudo rm -f /etc/modules-load.d/bbr.conf
+                    if [ $? -eq 0 ]; then
+                        echo -e "${GREEN}已移除 BBR 模块自动加载配置。${RESET}"
+                    else
+                        echo -e "${RED}移除自动加载配置失败，请手动检查 /etc/modules-load.d/bbr.conf！${RESET}"
+                    fi
+                fi
+            else
+                echo -e "${RED}卸载 BBR 失败，请检查模块状态！${RESET}"
+            fi
+        }
         
-        echo "$MAX_CONN:$BUFFER_SIZE:$FILE_MAX:$OPT_LEVEL"
-    }
-    
-    # 增强版网络优化（替换原apply_network_optimizations函数）
-    apply_enhanced_network_optimizations() {
-        echo -e "${YELLOW}正在应用增强版网络优化配置...${RESET}"
+        # 恢复默认 TCP 设置
+        restore_default_tcp_settings() {
+            echo -e "${YELLOW}正在恢复默认 TCP 拥塞控制设置...${RESET}"
+            sudo sysctl -w net.ipv4.tcp_congestion_control=cubic
+            sudo sysctl -w net.core.default_qdisc=fq
+            sysctl_file="/etc/sysctl.conf"
+            [ -f /etc/centos-release ] && sysctl_file="/etc/sysctl.d/99-bbr.conf"
+            sudo sysctl -p "$sysctl_file"
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}已恢复到默认 TCP 设置。${RESET}"
+            else
+                echo -e "${RED}恢复默认 TCP 设置失败，请手动检查 $sysctl_file！${RESET}"
+            fi
+        }
         
-        # 检测系统内存
-        detect_system_memory
-        SAFE_MEM=$?
-        
-        # 使用场景选择
-        echo ""
-        echo "使用场景选择"
-        echo "请选择VPS主要用途："
-        echo "1) 视频流媒体服务器 (多人同时观看)"
-        echo "2) 文件下载服务器 (大文件传输)"
-        echo "3) 混合用途 (视频+下载)"
-        echo "4) 平衡模式 (通用优化)"
-        echo "5) 自定义配置"
-        read -p "请选择 [1-5]: " scenario_choice
-        
-        case $scenario_choice in
-            1) SCENARIO="video" ;;
-            2) SCENARIO="download" ;;
-            3) SCENARIO="mixed" ;;
-            4) SCENARIO="balanced" ;;
-            5) 
-                echo "自定义模式需要高级知识，建议使用预设模式"
+        # 一键网络优化配置（增强版，替换原来的apply_network_optimizations）
+        apply_enhanced_network_optimizations() {
+            echo -e "${YELLOW}正在应用增强版网络优化配置...${RESET}"
+            
+            # 检测系统内存
+            detect_system_memory
+            SAFE_MEM=$?
+            
+            # 使用场景选择
+            echo ""
+            echo "使用场景选择"
+            echo "请选择VPS主要用途："
+            echo "1) 视频流媒体服务器 (多人同时观看)"
+            echo "2) 文件下载服务器 (大文件传输)"
+            echo "3) 混合用途 (视频+下载)"
+            echo "4) 平衡模式 (通用优化)"
+            echo "5) 返回"
+            read -p "请选择 [1-5]: " scenario_choice
+            
+            case $scenario_choice in
+                1) SCENARIO="video" ;;
+                2) SCENARIO="download" ;;
+                3) SCENARIO="mixed" ;;
+                4) SCENARIO="balanced" ;;
+                5) return ;;
+                *)
+                    echo -e "${YELLOW}无效选择，使用平衡模式${RESET}"
+                    SCENARIO="balanced"
+                    ;;
+            esac
+            
+            # 计算智能参数（90%减配）
+            PARAMS=$(calculate_smart_params "$SAFE_MEM" "$SCENARIO")
+            MAX_CONN=$(echo "$PARAMS" | cut -d: -f1)
+            BUFFER_SIZE=$(echo "$PARAMS" | cut -d: -f2)
+            FILE_MAX=$(echo "$PARAMS" | cut -d: -f3)
+            OPT_LEVEL=$(echo "$PARAMS" | cut -d: -f4)
+            
+            # 显示优化方案
+            echo ""
+            echo "优化方案详情："
+            echo "配置：${TOTAL_MEM_MB}MB 内存 / $(nproc)核 CPU"
+            echo "用途：已选择：${SCENARIO}优化"
+            if [ "$SCENARIO" = "mixed" ]; then
+                echo "mixed 模式"
+            fi
+            echo "最大连接数：$MAX_CONN"
+            echo "TCP缓冲区：$((BUFFER_SIZE / 1024 / 1024))MB"
+            echo "文件描述符：$FILE_MAX"
+            if [ -n "$OPT_LEVEL" ]; then
+                echo "视频优化强度：${OPT_LEVEL}/100"
+            fi
+            
+            # 优化提示（根据内存）
+            echo ""
+            if [ "$TOTAL_MEM_MB" -gt 2048 ]; then
+                echo -e "${GREEN}✅ 高配优化：${RESET}"
+                echo "  • 支持4K视频流"
+                echo "  • 多人同时观看流畅"
+                echo "  • 下载速度优秀"
+            elif [ "$TOTAL_MEM_MB" -gt 1024 ]; then
+                echo -e "${YELLOW}⚠️  中配优化：${RESET}"
+                echo "  • 支持1080p视频流"
+                echo "  • 适合多人同时观看"
+                echo "  • 下载性能良好"
+            else
+                echo -e "${YELLOW}⚠️  低配优化：${RESET}"
+                echo "  • 建议720p视频流"
+                echo "  • 适合个人使用"
+                echo "  • 下载性能尚可"
+            fi
+            
+            # 单次确认（包含重启）
+            read -p "是否应用此优化方案并重启生效？(y/N): " confirm
+            if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                echo "已取消优化"
                 return
-                ;;
-            *)
-                echo -e "${YELLOW}无效选择，使用平衡模式${RESET}"
-                SCENARIO="balanced"
-                ;;
-        esac
-        
-        # 计算智能参数
-        PARAMS=$(calculate_smart_params "$SAFE_MEM" "$SCENARIO")
-        MAX_CONN=$(echo "$PARAMS" | cut -d: -f1)
-        BUFFER_SIZE=$(echo "$PARAMS" | cut -d: -f2)
-        FILE_MAX=$(echo "$PARAMS" | cut -d: -f3)
-        OPT_LEVEL=$(echo "$PARAMS" | cut -d: -f4)
-        
-        # 显示优化方案
-        echo ""
-        echo "优化方案详情："
-        echo "配置：${TOTAL_MEM_MB}MB 内存 / $(nproc)核 CPU"
-        echo "用途：已选择：${SCENARIO}优化"
-        if [ "$SCENARIO" = "mixed" ]; then
-            echo "mixed 模式"
-        fi
-        echo "最大连接数：$MAX_CONN"
-        echo "TCP缓冲区：$((BUFFER_SIZE / 1024 / 1024))MB"
-        echo "文件描述符：$FILE_MAX"
-        if [ -n "$OPT_LEVEL" ]; then
-            echo "视频优化强度：${OPT_LEVEL}/100"
-        fi
-        
-        # 智能提示
-        echo ""
-        echo "智能提示："
-        if [ "$TOTAL_MEM_MB" -gt 2048 ]; then
-            echo -e "${GREEN}✅ 高配优化：${RESET}"
-            echo "  • 支持多个4K视频流"
-            echo "  • 多人同时观看体验优秀"
-            echo "  • 下载和视频可同时进行"
-        elif [ "$TOTAL_MEM_MB" -gt 1024 ]; then
-            echo -e "${YELLOW}⚠️  中配优化：${RESET}"
-            echo "  • 支持1080p视频流"
-            echo "  • 适合小团队同时观看"
-            echo "  • 下载性能良好"
-        else
-            echo -e "${YELLOW}⚠️  低配优化：${RESET}"
-            echo "  • 建议720p视频流"
-            echo "  • 适合个人使用"
-            echo "  • 下载性能有限"
-        fi
-        
-        read -p "是否应用此优化方案？(y/n): " confirm
-        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-            echo "已取消优化"
-            return
-        fi
-        
-        # 生成配置文件
-        sysctl_file="/etc/sysctl.conf"
-        [ -f /etc/centos-release ] && sysctl_file="/etc/sysctl.d/99-bbr.conf"
-        
-        # 备份原配置
-        BACKUP_FILE="/etc/sysctl.conf.backup.$(date +%Y%m%d%H%M%S)"
-        cp /etc/sysctl.conf "$BACKUP_FILE" 2>/dev/null || true
-        echo -e "${YELLOW}配置已备份到: $BACKUP_FILE${RESET}"
-        
-        cat > /tmp/enhanced_optimization.conf << EOF
-# 增强版网络优化配置
+            fi
+            
+            # 生成配置文件
+            sysctl_file="/etc/sysctl.conf"
+            [ -f /etc/centos-release ] && sysctl_file="/etc/sysctl.d/99-bbr.conf"
+            
+            # 备份原配置
+            BACKUP_FILE="/etc/sysctl.conf.backup.$(date +%Y%m%d%H%M%S)"
+            cp /etc/sysctl.conf "$BACKUP_FILE" 2>/dev/null || true
+            echo -e "${YELLOW}配置已备份到: $BACKUP_FILE${RESET}"
+            
+            cat > /tmp/enhanced_optimization.conf << EOF
+# 增强版网络优化配置（90%优化版）
 # 生成时间: $(date)
 # 内存: ${TOTAL_MEM_MB}MB (${MEM_LEVEL})
 # 场景: ${SCENARIO}
@@ -400,55 +557,59 @@ net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 net.ipv4.tcp_fastopen = 3
 
-# 连接管理
+# 连接管理（优化版）
 net.core.somaxconn = $MAX_CONN
 net.ipv4.tcp_max_syn_backlog = $MAX_CONN
-net.ipv4.tcp_max_tw_buckets = $((MAX_CONN * 2))
+net.ipv4.tcp_max_tw_buckets = $((MAX_CONN * 3))
 net.ipv4.tcp_tw_reuse = 1
-net.ipv4.tcp_fin_timeout = 30
+net.ipv4.tcp_fin_timeout = 20
 net.ipv4.tcp_syn_retries = 3
 net.ipv4.tcp_synack_retries = 3
 net.ipv4.tcp_orphan_retries = 2
 
-# TCP保活
-net.ipv4.tcp_keepalive_time = 300
+# TCP保活（优化版）
+net.ipv4.tcp_keepalive_time = 180
 net.ipv4.tcp_keepalive_probes = 5
 net.ipv4.tcp_keepalive_intvl = 15
 
 # 端口范围
-net.ipv4.ip_local_port_range = 1024 65535
+net.ipv4.ip_local_port_range = 10000 65535
 
 # 文件描述符
 fs.file-max = $FILE_MAX
+fs.nr_open = $FILE_MAX
 
-# 缓冲区设置
+# 缓冲区设置（优化版）
 net.core.rmem_max = $BUFFER_SIZE
 net.core.wmem_max = $BUFFER_SIZE
-net.core.rmem_default = $((BUFFER_SIZE / 4))
-net.core.wmem_default = $((BUFFER_SIZE / 4))
+net.core.rmem_default = $((BUFFER_SIZE / 2))
+net.core.wmem_default = $((BUFFER_SIZE / 2))
 
-# TCP缓冲区
+# TCP缓冲区（优化版）
 net.ipv4.tcp_rmem = 4096 $((BUFFER_SIZE / 2)) $BUFFER_SIZE
 net.ipv4.tcp_wmem = 4096 $((BUFFER_SIZE / 2)) $BUFFER_SIZE
 
-# TCP内存
+# TCP内存（优化版）
 $(case "$MEM_LEVEL" in
-    "tiny") echo "net.ipv4.tcp_mem = 1024 2048 3072" ;;
-    "small") echo "net.ipv4.tcp_mem = 2048 4096 6144" ;;
-    "medium") echo "net.ipv4.tcp_mem = 4096 8192 12288" ;;
-    "large") echo "net.ipv4.tcp_mem = 8192 16384 24576" ;;
-    "xlarge") echo "net.ipv4.tcp_mem = 16384 32768 49152" ;;
-    "huge") echo "net.ipv4.tcp_mem = 32768 65536 98304" ;;
-    *) echo "net.ipv4.tcp_mem = 4096 8192 12288" ;;
+    "tiny") echo "net.ipv4.tcp_mem = 1536 3072 4608" ;;
+    "small") echo "net.ipv4.tcp_mem = 3072 6144 9216" ;;
+    "medium") echo "net.ipv4.tcp_mem = 6144 12288 18432" ;;
+    "large") echo "net.ipv4.tcp_mem = 12288 24576 36864" ;;
+    "xlarge") echo "net.ipv4.tcp_mem = 24576 49152 73728" ;;
+    "huge") echo "net.ipv4.tcp_mem = 49152 98304 147456" ;;
+    *) echo "net.ipv4.tcp_mem = 6144 12288 18432" ;;
 esac)
 
-# 网络设备队列
-net.core.netdev_max_backlog = $((MAX_CONN / 2))
-net.core.netdev_budget = 500
-net.core.netdev_budget_usecs = 4000
+# 网络设备队列（优化版）
+net.core.netdev_max_backlog = $((MAX_CONN * 3 / 4))
+net.core.netdev_budget = 600
+net.core.netdev_budget_usecs = 5000
 
-# TCP优化
+# TCP优化（优化版）
 net.ipv4.tcp_ecn = 1
+net.ipv4.tcp_pacing_ss_ratio = 140
+net.ipv4.tcp_pacing_ca_ratio = 110
+net.ipv4.tcp_limit_output_bytes = $((BUFFER_SIZE * 2 / 3))
 net.ipv4.tcp_no_metrics_save = 1
 net.ipv4.tcp_slow_start_after_idle = 0
 net.ipv4.tcp_mtu_probing = 1
@@ -459,328 +620,162 @@ net.ipv4.tcp_sack = 1
 net.ipv4.tcp_syncookies = 1
 
 # 内存优化
-net.core.optmem_max = 65536
+net.core.optmem_max = 131072
 
 # 安全设置
 net.ipv4.conf.all.rp_filter = 1
 net.ipv4.conf.default.rp_filter = 1
 net.ipv4.conf.all.accept_redirects = 0
 net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.icmp_echo_ignore_broadcasts = 1
 
 # 视频优化（仅视频/混合模式）
 $(if [[ "$SCENARIO" == "video" || "$SCENARIO" == "mixed" ]]; then
 echo "net.core.busy_poll = $OPT_LEVEL"
 echo "net.core.busy_read = $OPT_LEVEL"
 echo "net.ipv4.tcp_low_latency = 1"
-echo "net.ipv4.tcp_notsent_lowat = 16384"
+echo "net.ipv4.tcp_notsent_lowat = 13107"
 fi)
 EOF
-        
-        # 安全应用配置
-        echo -e "${YELLOW}正在安全应用配置...${RESET}"
-        cp /tmp/enhanced_optimization.conf /etc/sysctl.conf
-        
-        # 测试关键参数
-        for param in net.core.somaxconn net.ipv4.tcp_max_syn_backlog fs.file-max net.core.rmem_max; do
-            value=$(grep "^$param" /tmp/enhanced_optimization.conf | awk -F= '{print $2}' | xargs)
-            echo -n "  设置 $param = $value ... "
-            if sysctl -w "$param=$value" >/dev/null 2>&1; then
-                echo -e "${GREEN}✅${RESET}"
-            else
-                echo -e "${YELLOW}⚠️  使用安全值${RESET}"
-            fi
-            sleep 0.1
-        done
-        
-        # 应用完整配置
-        if sysctl -p > /tmp/sysctl_apply.log 2>&1; then
-            echo -e "${GREEN}✅ 增强版网络优化配置已应用！${RESET}"
-        else
-            echo -e "${YELLOW}⚠️  部分配置可能未生效${RESET}"
-        fi
-        
-        # 设置文件描述符限制
-        limits_file="/etc/security/limits.conf"
-        [ -f /etc/centos-release ] && limits_file="/etc/security/limits.d/99-custom.conf"
-        
-        echo "* soft nofile $FILE_MAX" | sudo tee -a "$limits_file" >/dev/null
-        echo "* hard nofile $FILE_MAX" | sudo tee -a "$limits_file" >/dev/null
-        
-        # 临时限制
-        ulimit -n $FILE_MAX 2>/dev/null && echo -e "${GREEN}临时文件描述符限制已设置为 $FILE_MAX${RESET}" || echo -e "${YELLOW}设置临时限制失败${RESET}"
-        
-        echo -e "${GREEN}增强版网络优化完成！${RESET}"
-        
-        # 安全重启提示
-        read -p "是否立即重启系统以确保配置生效？(y/n): " reboot_choice
-        if [[ $reboot_choice == "y" || $reboot_choice == "Y" ]]; then
-            echo -e "${YELLOW}系统将在10秒后重启...${RESET}"
-            echo -e "${GREEN}如果无法连接，配置已备份到: $BACKUP_FILE${RESET}"
-            sleep 10
-            sudo reboot
-        else
-            echo -e "${YELLOW}请稍后手动运行 'sudo reboot' 重启系统以确保配置生效。${RESET}"
-        fi
-    }
-    
-    # 检查内核版本是否支持 BBR v3
-    check_kernel_version() {
-        kernel_version=$(uname -r)
-        major_version=$(echo "$kernel_version" | awk -F. '{print $1}')
-        minor_version=$(echo "$kernel_version" | awk -F. '{print $2}' | cut -d- -f1)
-        if [[ $major_version -lt 5 || ($major_version -eq 5 && $minor_version -lt 6) ]]; then
-            echo -e "${RED}当前内核版本 $kernel_version 不支持 BBR v3！${RESET}"
-            if [ -f /etc/centos-release ] && grep -q "CentOS Linux release 7" /etc/centos-release; then
-                echo -e "${YELLOW}CentOS 7 默认内核（3.10）不支持 BBR v3，建议升级到 5.6 或更高版本（如通过 'yum install kernel'）。${RESET}"
-            else
-                echo -e "${YELLOW}请手动升级内核到 5.6 或更高版本！${RESET}"
-            fi
-            return 1
-        fi
-        echo -e "${GREEN}内核版本 $kernel_version 支持 BBR v3。${RESET}"
-        return 0
-    }
-    
-    # 检查 BBR v3 安装和运行状态
-    check_bbr_status() {
-        echo -e "${YELLOW}正在检查 BBR v3 状态...${RESET}"
-        PURPLE='\033[35m'
-        if modinfo tcp_bbr >/dev/null 2>&1; then
-            if lsmod | grep -q "tcp_bbr"; then
-                echo -e "${GREEN}BBR v3 模块 (tcp_bbr) 已加载。${RESET}"
-            else
-                echo -e "${PURPLE}BBR v3 模块 (tcp_bbr) 未加载，可能未启用。${RESET}"
-                return 1
-            fi
-        else
-            echo -e "${RED}BBR v3 模块 (tcp_bbr) 未找到，可能内核不支持或模块缺失！${RESET}"
-            echo -e "${YELLOW}请确认内核版本 >= 5.6，并检查模块路径（如 /lib/modules/$(uname -r)/kernel/net/ipv4/tcp_bbr.ko）。${RESET}"
-            return 1
-        fi
-        current_congestion=$(sysctl -n net.ipv4.tcp_congestion_control)
-        if [ "$current_congestion" = "bbr" ]; then
-            echo -e "${PURPLE}拥塞控制算法已设置为 BBR，BBR v3 已成功启动。${RESET}"
-        else
-            echo -e "${RED}当前拥塞控制算法为 $current_congestion，BBR v3 未成功启动。${RESET}"
-            echo -e "${YELLOW}建议：运行 'sudo sysctl -w net.ipv4.tcp_congestion_control=bbr' 或重新安装 BBR v3。${RESET}"
-            return 1
-        fi
-        sysctl_file="/etc/sysctl.conf"
-        [ -f /etc/centos-release ] && sysctl_file="/etc/sysctl.d/99-bbr.conf"
-        if grep -q "net.ipv4.tcp_congestion_control = bbr" "$sysctl_file"; then
-            echo -e "${GREEN}BBR v3 配置已写入 $sysctl_file，重启后将保持生效。${RESET}"
-        else
-            echo -e "${YELLOW}警告：BBR v3 配置未写入 $sysctl_file，重启后可能失效。${RESET}"
-        fi
-        if [ -f /etc/modules-load.d/bbr.conf ] && grep -q "tcp_bbr" /etc/modules-load.d/bbr.conf; then
-            echo -e "${GREEN}BBR v3 模块配置为系统启动时自动加载。${RESET}"
-        else
-            echo -e "${YELLOW}警告：BBR v3 模块未配置为自动加载，重启后可能需要手动加载。${RESET}"
-            echo -e "${YELLOW}正在修复：添加 tcp_bbr 到自动加载配置...${RESET}"
-            echo "tcp_bbr" | sudo tee /etc/modules-load.d/bbr.conf >/dev/null
-            if [ $? -eq 0 ]; then
-                echo -e "${GREEN}已添加 tcp_bbr 到自动加载配置。${RESET}"
-            else
-                echo -e "${RED}添加自动加载配置失败，请手动检查 /etc/modules-load.d/bbr.conf！${RESET}"
-            fi
-        fi
-        return 0
-    }
-    
-    # 检查并显示是否存在多个 BBR 版本
-    check_multiple_bbr_versions() {
-        bbr_versions=$(lsmod | grep -o 'tcp_bbr.*' | uniq)
-        if [[ $(echo "$bbr_versions" | wc -l) -gt 1 ]]; then
-            echo -e "${RED}系统存在多个 BBR 版本：${RESET}"
-            echo "$bbr_versions"
-            read -p "是否卸载其他版本并保留当前版本？(y/n): " choice
-            if [[ $choice == "y" || $choice == "Y" ]]; then
-                uninstall_other_bbr_versions
-            fi
-        else
-            echo -e "${YELLOW}没有发现多个 BBR 版本。${RESET}"
-        fi
-    }
-    
-    # 卸载其他 BBR 版本
-    uninstall_other_bbr_versions() {
-        current_bbr=$(lsmod | grep tcp_bbr | head -n 1)
-        current_bbr_version=$(echo "$current_bbr" | awk '{print $1}')
-        sudo modprobe -r "$current_bbr_version"
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}$current_bbr_version 卸载成功${RESET}"
-        else
-            echo -e "${RED}$current_bbr_version 卸载失败，请检查权限或模块状态！${RESET}"
-        fi
-    }
-    
-    # 安装 BBR v3
-    install_bbr_v3() {
-        echo -e "${YELLOW}正在安装 BBR v3...${RESET}"
-        sudo modprobe tcp_bbr
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}加载 tcp_bbr 模块失败，请检查内核支持或模块路径！${RESET}"
-            return 1
-        fi
-        sysctl_file="/etc/sysctl.conf"
-        [ -f /etc/centos-release ] && sysctl_file="/etc/sysctl.d/99-bbr.conf"
-        echo "net.ipv4.tcp_congestion_control = bbr" | sudo tee -a "$sysctl_file"
-        sudo sysctl -p "$sysctl_file"
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}BBR v3 配置已应用！${RESET}"
-        else
-            echo -e "${RED}应用 sysctl 配置失败，请手动检查 $sysctl_file！${RESET}"
-            return 1
-        fi
-        if [ ! -f /etc/modules-load.d/bbr.conf ] || ! grep -q "tcp_bbr" /etc/modules-load.d/bbr.conf; then
-            echo "tcp_bbr" | sudo tee /etc/modules-load.d/bbr.conf >/dev/null
-            if [ $? -eq 0 ]; then
-                echo -e "${GREEN}已配置 tcp_bbr 模块自动加载。${RESET}"
-            else
-                echo -e "${RED}配置模块自动加载失败，请手动检查 /etc/modules-load.d/bbr.conf！${RESET}"
-            fi
-        fi
-        check_bbr_status
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}BBR v3 安装成功！${RESET}"
-        else
-            echo -e "${RED}BBR v3 安装验证失败，请检查状态！${RESET}"
-        fi
-    }
-    
-    # 卸载 BBR
-    uninstall_bbr() {
-        echo -e "${YELLOW}正在卸载当前 BBR 版本...${RESET}"
-        sudo modprobe -r tcp_bbr
-        if [ $? -eq 0 ]; then
-            sudo sysctl -w net.ipv4.tcp_congestion_control=cubic
-            echo -e "${GREEN}BBR 版本已卸载！${RESET}"
-            if [ -f /etc/modules-load.d/bbr.conf ]; then
-                sudo rm -f /etc/modules-load.d/bbr.conf
-                if [ $? -eq 0 ]; then
-                    echo -e "${GREEN}已移除 BBR 模块自动加载配置。${RESET}"
+            
+            # 安全应用配置
+            echo -e "${YELLOW}正在安全应用配置...${RESET}"
+            cp /tmp/enhanced_optimization.conf /etc/sysctl.conf
+            
+            # 测试关键参数
+            for param in net.core.somaxconn net.ipv4.tcp_max_syn_backlog fs.file-max net.core.rmem_max; do
+                value=$(grep "^$param" /tmp/enhanced_optimization.conf | awk -F= '{print $2}' | xargs)
+                echo -n "  设置 $param = $value ... "
+                if sysctl -w "$param=$value" >/dev/null 2>&1; then
+                    echo -e "${GREEN}✅${RESET}"
                 else
-                    echo -e "${RED}移除自动加载配置失败，请手动检查 /etc/modules-load.d/bbr.conf！${RESET}"
+                    echo -e "${YELLOW}⚠️${RESET}"
                 fi
-            fi
-        else
-            echo -e "${RED}卸载 BBR 失败，请检查模块状态！${RESET}"
-        fi
-    }
-    
-    # 恢复默认 TCP 设置
-    restore_default_tcp_settings() {
-        echo -e "${YELLOW}正在恢复默认 TCP 拥塞控制设置...${RESET}"
-        sudo sysctl -w net.ipv4.tcp_congestion_control=cubic
-        sudo sysctl -w net.core.default_qdisc=fq
-        sysctl_file="/etc/sysctl.conf"
-        [ -f /etc/centos-release ] && sysctl_file="/etc/sysctl.d/99-bbr.conf"
-        sudo sysctl -p "$sysctl_file"
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}已恢复到默认 TCP 设置。${RESET}"
-        else
-            echo -e "${RED}恢复默认 TCP 设置失败，请手动检查 $sysctl_file！${RESET}"
-        fi
-    }
-    
-    # 安装原始 BBR
-    install_original_bbr() {
-        echo -e "${YELLOW}正在安装原始 BBR ...${RESET}"
-        wget -O /tmp/tcpx.sh "https://github.com/sinian-liu/Linux-NetSpeed-BBR/raw/master/tcpx.sh"
-        if [ $? -eq 0 ]; then
-            chmod +x /tmp/tcpx.sh
-            bash /tmp/tcpx.sh
-            rm -f /tmp/tcpx.sh
-            if [ $? -eq 0 ]; then
-                echo -e "${GREEN}原始 BBR 安装成功！${RESET}"
+                sleep 0.1
+            done
+            
+            # 应用完整配置
+            if sysctl -p > /tmp/sysctl_apply.log 2>&1; then
+                echo -e "${GREEN}✅ 增强版网络优化配置已应用！${RESET}"
             else
-                echo -e "${RED}原始 BBR 安装失败，请检查网络或脚本执行！${RESET}"
+                echo -e "${YELLOW}⚠️  部分配置可能未生效${RESET}"
             fi
-        else
-            echo -e "${RED}下载 BBR 脚本失败，请检查网络！${RESET}"
-        fi
-    }
-    
-    # BBR 管理子菜单（这是实际执行的部分）
-    while true; do
-        echo -e "${GREEN}=== BBR 和 BBR v3 管理 ===${RESET}"
-        echo "1) 安装原始 BBR"
-        echo "2) 安装 BBR v3"
-        echo "3) 卸载当前 BBR 版本"
-        echo "4) 检查 BBR 状态"
-        echo "5) 应用增强网络优化"
-        echo "6) 恢复默认 TCP 设置"
-        echo "7) 返回主菜单"
-        read -p "请输入选项 [1-7]: " bbr_choice
+            
+            # 设置文件描述符限制
+            limits_file="/etc/security/limits.conf"
+            [ -f /etc/centos-release ] && limits_file="/etc/security/limits.d/99-custom.conf"
+            
+            # 移除旧的设置
+            sed -i '/nofile/d' "$limits_file" 2>/dev/null
+            echo "* soft nofile $FILE_MAX" | sudo tee -a "$limits_file" >/dev/null
+            echo "* hard nofile $FILE_MAX" | sudo tee -a "$limits_file" >/dev/null
+            
+            # 临时限制
+            ulimit -n $FILE_MAX 2>/dev/null && echo -e "${GREEN}临时文件描述符限制已设置为 $FILE_MAX${RESET}" || echo -e "${YELLOW}设置临时限制失败${RESET}"
+            
+            echo -e "${GREEN}增强版网络优化完成！${RESET}"
+            echo -e "${YELLOW}正在立即重启系统...${RESET}"
+            echo -e "${GREEN}如果无法连接，配置已备份到: $BACKUP_FILE${RESET}"
+            sudo reboot
+        }
         
-        if [ -z "$bbr_choice" ]; then
-            echo -e "${YELLOW}返回主菜单...${RESET}"
-            break
-        fi
-        
-        case $bbr_choice in
-            1)
-                install_original_bbr
-                read -p "按回车键返回 BBR 管理菜单..."
-                ;;
-            2)
-                check_kernel_version
+        # 安装原始 BBR
+        install_original_bbr() {
+            echo -e "${YELLOW}正在安装原始 BBR ...${RESET}"
+            wget -O /tmp/tcpx.sh "https://github.com/sinian-liu/Linux-NetSpeed-BBR/raw/master/tcpx.sh"
+            if [ $? -eq 0 ]; then
+                chmod +x /tmp/tcpx.sh
+                bash /tmp/tcpx.sh
+                rm -f /tmp/tcpx.sh
                 if [ $? -eq 0 ]; then
-                    if check_bbr_status; then
-                        echo -e "${YELLOW}BBR v3 已安装，请选择操作：${RESET}"
-                        echo "1. 重新安装 BBR v3"
-                        echo "2. 卸载当前 BBR 版本"
-                        echo "3. 返回 BBR 管理菜单"
-                        read -p "请输入选项 [1-3]: " sub_choice
-                        case $sub_choice in
-                            1)
-                                uninstall_bbr
-                                install_bbr_v3
-                                ;;
-                            2)
-                                uninstall_bbr
-                                ;;
-                            3)
-                                continue
-                                ;;
-                            *)
-                                echo -e "${RED}无效选择！${RESET}"
-                                ;;
-                        esac
-                    else
-                        check_multiple_bbr_versions
-                        install_bbr_v3
-                    fi
+                    echo -e "${GREEN}原始 BBR 安装成功！${RESET}"
+                else
+                    echo -e "${RED}原始 BBR 安装失败，请检查网络或脚本执行！${RESET}"
                 fi
-                read -p "按回车键返回 BBR 管理菜单..."
-                ;;
-            3)
-                uninstall_bbr
-                read -p "按回车键返回 BBR 管理菜单..."
-                ;;
-            4)
-                check_bbr_status
-                read -p "按回车键返回 BBR 管理菜单..."
-                ;;
-            5)
-                # 使用增强版网络优化
-                apply_enhanced_network_optimizations
-                read -p "按回车键返回 BBR 管理菜单..."
-                ;;
-            6)
-                restore_default_tcp_settings
-                read -p "按回车键返回 BBR 管理菜单..."
-                ;;
-            7)
+            else
+                echo -e "${RED}下载 BBR 脚本失败，请检查网络！${RESET}"
+            fi
+        }
+        
+        # BBR 管理子菜单
+        while true; do
+            echo -e "${GREEN}=== BBR 和 BBR v3 管理 ===${RESET}"
+            echo "1) 安装原始 BBR"
+            echo "2) 安装 BBR v3"
+            echo "3) 卸载当前 BBR 版本"
+            echo "4) 检查 BBR 状态"
+            echo "5) 应用增强网络优化"
+            echo "6) 恢复默认 TCP 设置"
+            echo "7) 返回主菜单"
+            read -p "请输入选项 [1-7]: " bbr_choice
+            if [ -z "$bbr_choice" ]; then
                 echo -e "${YELLOW}返回主菜单...${RESET}"
                 break
-                ;;
-            *)
-                echo -e "${RED}无效选项，请重新输入！${RESET}"
-                read -p "按回车键继续..."
-                ;;
-        esac
-    done
+            fi
+            case $bbr_choice in
+                1)
+                    install_original_bbr
+                    read -p "按回车键返回 BBR 管理菜单..."
+                    ;;
+                2)
+                    check_kernel_version
+                    if [ $? -eq 0 ]; then
+                        if check_bbr_status; then
+                            echo -e "${YELLOW}BBR v3 已安装，请选择操作：${RESET}"
+                            echo "1. 重新安装 BBR v3"
+                            echo "2. 卸载当前 BBR 版本"
+                            echo "3. 返回 BBR 管理菜单"
+                            read -p "请输入选项 [1-3]: " sub_choice
+                            case $sub_choice in
+                                1)
+                                    uninstall_bbr
+                                    install_bbr_v3
+                                    ;;
+                                2)
+                                    uninstall_bbr
+                                    ;;
+                                3)
+                                    continue
+                                    ;;
+                                *)
+                                    echo -e "${RED}无效选择！${RESET}"
+                                    ;;
+                            esac
+                        else
+                            check_multiple_bbr_versions
+                            install_bbr_v3
+                        fi
+                    fi
+                    read -p "按回车键返回 BBR 管理菜单..."
+                    ;;
+                3)
+                    uninstall_bbr
+                    read -p "按回车键返回 BBR 管理菜单..."
+                    ;;
+                4)
+                    check_bbr_status
+                    read -p "按回车键返回 BBR 管理菜单..."
+                    ;;
+                5)
+                    apply_enhanced_network_optimizations
+                    read -p "按回车键返回 BBR 管理菜单..."
+                    ;;
+                6)
+                    restore_default_tcp_settings
+                    read -p "按回车键返回 BBR 管理菜单..."
+                    ;;
+                7)
+                    echo -e "${YELLOW}返回主菜单...${RESET}"
+                    break
+                    ;;
+                *)
+                    echo -e "${RED}无效选项，请重新输入！${RESET}"
+                    read -p "按回车键继续..."
+                    ;;
+            esac
+        done
+    }
+    bbr_management
     ;;
 
             3)
