@@ -240,7 +240,9 @@ show_menu() {
             CPU_CORES=$(nproc)
             MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
             MEM_MB=$((MEM_KB/1024))
-            MEM_GB=$(echo "scale=1; $MEM_MB/1024" | bc)
+            # 修复内存计算：使用整数运算
+            MEM_GB_INT=$((MEM_MB/1024))
+            MEM_GB_DEC=$(((MEM_MB%1024)*10/1024))
             
             # 显示结果
             echo -e "${GREEN}================================${RESET}"
@@ -248,28 +250,35 @@ show_menu() {
             echo -e "操作系统: $OS_NAME $VER"
             echo -e "CPU核心: $CPU_CORES"
             
-            if [ $MEM_GB -ge 1 ]; then
-                echo -e "内存: ${MEM_GB}GB (${MEM_MB}MB)"
+            if [ $MEM_MB -ge 1024 ]; then
+                if [ $MEM_GB_DEC -gt 0 ]; then
+                    echo -e "内存: ${MEM_GB_INT}.${MEM_GB_DEC}GB (${MEM_MB}MB)"
+                else
+                    echo -e "内存: ${MEM_GB_INT}GB (${MEM_MB}MB)"
+                fi
             else
                 echo -e "内存: ${MEM_MB}MB"
             fi
             echo -e "${GREEN}================================${RESET}"
             
-            export CPU_CORES MEM_MB MEM_GB OS VER
+            export CPU_CORES MEM_MB OS VER
         }
         
-        # 修复：使用场景选择函数（避免递归调用）
-        select_vps_usage() {
+        # 修复：先显示使用场景菜单，再让用户选择
+        show_usage_menu() {
             echo -e "${CYAN}请选择VPS主要用途：${RESET}"
             echo "1) 视频流媒体服务器 (多人同时观看)"
             echo "2) 文件下载服务器 (大文件传输)"
             echo "3) 混合用途 (视频+下载)"
             echo "4) 平衡模式 (通用优化)"
             echo "5) 自定义配置"
+        }
+        
+        # 获取用户选择
+        get_usage_choice() {
+            local choice=$1
             
-            read -p "请选择 [1-5]: " usage_choice
-            
-            case $usage_choice in
+            case $choice in
                 1)
                     usage="video"
                     echo -e "${GREEN}已选择：视频流媒体优化${RESET}"
@@ -299,7 +308,7 @@ show_menu() {
             echo "$usage"
         }
         
-        # 修复：自定义优化配置（独立函数）
+        # 自定义优化配置
         get_custom_config() {
             echo -e "${YELLOW}自定义优化配置${RESET}"
             
@@ -338,14 +347,13 @@ show_menu() {
             fi
         }
         
-        # 动态计算优化参数（支持任意配置）
+        # 动态计算优化参数
         calculate_dynamic_params() {
             local mem_mb=$1
             local cpu_cores=$2
             local vps_usage=$3  # "video" "download" "mixed" "balance" "custom"
             
             if [ "$vps_usage" = "custom" ]; then
-                # 自定义参数需要单独处理
                 echo "custom"
                 return
             fi
@@ -445,7 +453,7 @@ show_menu() {
             echo "$final_conn $final_buffer $busy_poll_val"
         }
         
-        # 修复：生成增强版配置（避免变量未定义）
+        # 生成增强版配置
         generate_enhanced_config() {
             local somaxconn=$1
             local rmem_max=$2
@@ -627,7 +635,7 @@ EOF
                 sysctl_file="/etc/sysctl.d/99-enhanced-optimized.conf"
             fi
             
-            # 修复：先检查文件是否存在
+            # 先检查文件是否存在
             if [ ! -f "$sysctl_file" ]; then
                 echo -e "${RED}❌ 配置文件不存在: $sysctl_file${RESET}"
                 return 1
@@ -674,9 +682,61 @@ root hard nofile $nofile_limit
 EOF
             
             echo -e "${GREEN}✅ 文件描述符限制已设置: $nofile_limit${RESET}"
+            
+            # 临时生效
+            ulimit -n $nofile_limit 2>/dev/null || echo -e "${YELLOW}⚠️  临时限制设置失败，需要重新登录生效${RESET}"
         }
         
-        # 修复：安装BBR（解决配置问题）
+        # 修复：安装原始BBR（自动下载并执行）
+        install_original_bbr() {
+            echo -e "${YELLOW}正在安装原始 BBR ...${RESET}"
+            
+            # 提供两个选项
+            echo -e "${CYAN}选择安装方式：${RESET}"
+            echo "1) 使用 teddysun 的一键脚本 (推荐)"
+            echo "2) 使用 sinian-liu 的脚本"
+            echo "3) 取消安装"
+            
+            read -p "请选择 [1-3]: " install_choice
+            
+            case $install_choice in
+                1)
+                    # teddysun 的一键脚本
+                    echo -e "${YELLOW}下载 teddysun 的 BBR 脚本...${RESET}"
+                    wget -O /tmp/bbr.sh "https://raw.githubusercontent.com/teddysun/across/master/bbr.sh"
+                    if [ $? -eq 0 ]; then
+                        chmod +x /tmp/bbr.sh
+                        echo -e "${GREEN}脚本下载成功，开始安装...${RESET}"
+                        echo -e "${YELLOW}⚠️  注意：安装过程中可能需要重启系统${RESET}"
+                        read -p "按回车键继续安装..."
+                        bash /tmp/bbr.sh
+                    else
+                        echo -e "${RED}下载脚本失败，请检查网络连接！${RESET}"
+                    fi
+                    ;;
+                2)
+                    # sinian-liu 的脚本
+                    echo -e "${YELLOW}下载 sinian-liu 的 BBR 脚本...${RESET}"
+                    wget -O /tmp/tcpx.sh "https://github.com/sinian-liu/Linux-NetSpeed-BBR/raw/master/tcpx.sh"
+                    if [ $? -eq 0 ]; then
+                        chmod +x /tmp/tcpx.sh
+                        echo -e "${GREEN}脚本下载成功，开始安装...${RESET}"
+                        read -p "按回车键继续安装..."
+                        bash /tmp/tcpx.sh
+                    else
+                        echo -e "${RED}下载脚本失败，请检查网络连接！${RESET}"
+                    fi
+                    ;;
+                3)
+                    echo -e "${YELLOW}安装已取消${RESET}"
+                    ;;
+                *)
+                    echo -e "${RED}无效选择，安装取消${RESET}"
+                    ;;
+            esac
+        }
+        
+        # 安装BBR（改进版）
         install_bbr_v3() {
             echo -e "${YELLOW}正在安装/配置BBR...${RESET}"
             
@@ -699,7 +759,7 @@ EOF
                 return 1
             fi
             
-            # 配置sysctl - 修复qdisc问题
+            # 配置sysctl
             sysctl_file="/etc/sysctl.conf"
             if [ "$OS" = "centos" ] || [ "$OS" = "rhel" ] || \
                [ "$OS" = "almalinux" ] || [ "$OS" = "rocky" ]; then
@@ -708,8 +768,7 @@ EOF
             
             # 先检查可用的qdisc
             echo -e "${YELLOW}检查可用队列规则...${RESET}"
-            available_qdiscs=$(ls /lib/modules/$(uname -r)/kernel/net/sched/ | grep -o 'sch_[a-z]*' | sed 's/sch_//' | tr '\n' ' ')
-            echo -e "可用队列规则: $available_qdiscs"
+            available_qdiscs=$(ls /lib/modules/$(uname -r)/kernel/net/sched/ 2>/dev/null | grep -o 'sch_[a-z]*' | sed 's/sch_//' | tr '\n' ' ' || echo "pfifo_fast")
             
             # 选择最佳qdisc
             qdisc_to_use="fq_codel"
@@ -761,7 +820,7 @@ EOF
             fi
         }
         
-        # 检查BBR状态
+        # 修复：检查BBR状态（说人话版本）
         check_bbr_status() {
             echo -e "${YELLOW}正在检查BBR状态...${RESET}"
             
@@ -774,19 +833,65 @@ EOF
             
             # 检查当前算法
             current_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "unknown")
-            echo -e "拥塞控制: $current_cc"
+            echo -e "当前拥塞控制算法: $current_cc"
             
             # 检查队列
             current_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "unknown")
-            echo -e "队列规则: $current_qdisc"
+            echo -e "当前队列规则: $current_qdisc"
             
             # 检查TFO
             current_tfo=$(sysctl -n net.ipv4.tcp_fastopen 2>/dev/null || echo "unknown")
             echo -e "TCP快速打开: $current_tfo"
             
-            # 显示连接统计
-            echo -e "\n${CYAN}当前连接状态:${RESET}"
-            ss -s 2>/dev/null | head -5 || echo "ss命令不可用"
+            # 说人话的连接状态
+            echo -e "\n${CYAN}📊 当前网络连接状态:${RESET}"
+            
+            # 使用 ss 命令获取连接信息
+            if command -v ss &> /dev/null; then
+                ss_info=$(ss -s 2>/dev/null)
+                
+                # 提取关键信息
+                total_connections=$(echo "$ss_info" | grep -oP 'Total: \K\d+')
+                tcp_info=$(echo "$ss_info" | grep -A1 '^TCP:' | tail -1)
+                
+                # 说人话的解析
+                if [ -n "$total_connections" ]; then
+                    echo -e "总连接数: $total_connections 个"
+                fi
+                
+                if [ -n "$tcp_info" ]; then
+                    # 解析 TCP 状态
+                    estab=$(echo "$tcp_info" | grep -oP 'estab \K\d+')
+                    closed=$(echo "$tcp_info" | grep -oP 'closed \K\d+')
+                    orphaned=$(echo "$tcp_info" | grep -oP 'orphaned \K\d+')
+                    timewait=$(echo "$tcp_info" | grep -oP 'timewait \K\d+')
+                    
+                    [ -n "$estab" ] && echo -e "已建立连接: $estab 个"
+                    [ -n "$closed" ] && echo -e "已关闭连接: $closed 个"
+                    [ -n "$orphaned" ] && echo -e "孤儿连接: $orphaned 个"
+                    [ -n "$timewait" ] && echo -e "等待关闭: $timewait 个"
+                fi
+                
+                # 显示端口使用情况
+                echo -e "\n${CYAN}📈 连接类型统计:${RESET}"
+                echo "$ss_info" | grep -E '^(RAW|UDP|TCP|INET)' | while read line; do
+                    echo "  $line"
+                done
+            else
+                echo -e "${YELLOW}⚠️  ss命令不可用，无法获取详细连接信息${RESET}"
+                echo -e "可以运行以下命令查看连接:"
+                echo -e "  netstat -ant | grep -c ESTABLISHED  # 查看已建立连接"
+                echo -e "  netstat -ant | wc -l               # 查看总连接数"
+            fi
+            
+            # 显示简单的性能提示
+            echo -e "\n${CYAN}💡 性能提示:${RESET}"
+            if [ "$current_cc" = "bbr" ]; then
+                echo -e "  ✅ 正在使用BBR算法，网络优化已启用"
+                echo -e "  🔧 建议配合网络优化配置使用效果更佳"
+            else
+                echo -e "  ⚠️  未使用BBR，建议运行选项2安装BBR"
+            fi
         }
         
         # 卸载BBR
@@ -805,7 +910,7 @@ EOF
             echo -e "${GREEN}✅ BBR已卸载${RESET}"
         }
         
-        # 修复：增强版网络优化（主函数）- 完全重写
+        # 修复：增强版网络优化（主函数）- 先显示菜单再选择
         enhanced_network_optimization() {
             echo -e "${YELLOW}正在应用增强版网络优化...${RESET}"
             echo -e "${CYAN}================================${RESET}"
@@ -813,11 +918,17 @@ EOF
             # 1. 检测系统
             detect_system_enhanced
             
-            # 2. 选择使用场景
+            # 2. 显示使用场景菜单
             echo -e "\n${CYAN}使用场景选择${RESET}"
-            usage=$(select_vps_usage)
+            show_usage_menu
             
-            # 3. 自定义配置处理
+            # 3. 获取用户选择
+            read -p "请选择 [1-5]: " usage_choice
+            
+            # 4. 根据选择获取配置
+            usage=$(get_usage_choice "$usage_choice")
+            
+            # 5. 自定义配置处理
             if [ "$usage" = "custom" ]; then
                 custom_params=$(get_custom_config)
                 if [ -z "$custom_params" ]; then
@@ -844,7 +955,7 @@ EOF
                 fi
             fi
             
-            # 4. 显示优化方案
+            # 6. 显示优化方案
             echo -e "\n${GREEN}优化方案详情：${RESET}"
             echo -e "配置：${MEM_MB}MB 内存 / ${CPU_CORES}核 CPU"
             echo -e "用途：$usage 模式"
@@ -857,7 +968,7 @@ EOF
                 echo -e "视频优化：已安全禁用"
             fi
             
-            # 5. 智能警告系统
+            # 7. 智能警告系统
             echo -e "\n${CYAN}智能提示：${RESET}"
             
             if [ $MEM_MB -lt 256 ]; then
@@ -918,7 +1029,7 @@ EOF
                 echo -e "如需开启，建议升级到1GB+内存或2核+CPU"
             fi
             
-            # 6. 用户确认
+            # 8. 用户确认
             echo -e "\n${YELLOW}是否应用此优化方案？${RESET}"
             read -p "请输入 (y/n): " confirm
             if [[ $confirm != "y" && $confirm != "Y" ]]; then
@@ -926,11 +1037,11 @@ EOF
                 return
             fi
             
-            # 7. 生成和应用配置
+            # 9. 生成和应用配置
             generate_enhanced_config "$somaxconn" "$rmem_max" "$busy_poll" "$usage"
             apply_config_and_limits "$somaxconn"
             
-            # 8. 完成提示
+            # 10. 完成提示
             echo -e "\n${GREEN}================================${RESET}"
             echo -e "${GREEN}增强版网络优化完成！${RESET}"
             echo -e "${CYAN}优化总结：${RESET}"
@@ -939,7 +1050,7 @@ EOF
             echo -e "✓ 文件描述符: $((somaxconn * 4))"
             echo -e "✓ 视频优化: $(if [ $busy_poll -gt 0 ]; then echo "已启用 ($busy_poll/100)"; else echo "已安全禁用"; fi)"
             
-            # 9. 重启建议
+            # 11. 重启建议
             read -p "是否重启系统使配置完全生效？(y/n): " reboot_choice
             if [[ $reboot_choice == "y" || $reboot_choice == "Y" ]]; then
                 echo -e "${YELLOW}正在重启系统...${RESET}"
@@ -949,11 +1060,11 @@ EOF
             fi
         }
         
-        # 修复：恢复默认TCP设置
+        # 恢复默认TCP设置
         restore_default_tcp_settings() {
             echo -e "${YELLOW}正在恢复默认TCP设置...${RESET}"
             
-            # 恢复默认值（修复sysctl命令）
+            # 恢复默认值
             sudo sysctl -w net.ipv4.tcp_congestion_control=cubic 2>/dev/null
             sudo sysctl -w net.core.default_qdisc=fq_codel 2>/dev/null
             sudo sysctl -w net.core.somaxconn=128 2>/dev/null
@@ -999,19 +1110,7 @@ EOF
                 fi
             done
             
-            # 停止服务
-            systemctl stop network-monitor.service 2>/dev/null || true
-            systemctl stop network-learner.service 2>/dev/null || true
-            
             echo -e "${GREEN}✅ 默认TCP设置已恢复${RESET}"
-        }
-        
-        # 安装原始BBR
-        install_original_bbr() {
-            echo -e "${YELLOW}正在安装原始BBR...${RESET}"
-            echo -e "请访问: https://github.com/teddysun/across/blob/master/bbr.sh"
-            echo -e "或运行: wget -O bbr.sh https://raw.githubusercontent.com/teddysun/across/master/bbr.sh && chmod +x bbr.sh && ./bbr.sh"
-            read -p "${YELLOW}按回车返回菜单...${RESET}"
         }
         
         # BBR管理子菜单
@@ -1029,6 +1128,7 @@ EOF
             case $bbr_choice in
                 1)
                     install_original_bbr
+                    read -p "按回车键返回..."
                     ;;
                 2)
                     install_bbr_v3
